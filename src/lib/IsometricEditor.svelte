@@ -43,9 +43,32 @@
     let paintColor: string = $state("#000000");
     let isDrawing: boolean = $state(false);
     let zoom: number = $state(1);
-    let tool: "pixel" | "line" | "pan" | "fill" | "replace" | "shape" =
-        $state("pixel");
+    let tool:
+        | "pixel"
+        | "line"
+        | "pan"
+        | "fill"
+        | "replace"
+        | "shape"
+        | "select" = $state("pixel");
     let brushSize: number = $state(1);
+
+    // Selection tool state
+    let isSelecting: boolean = $state(false);
+    let selectionStartX: number = $state(0);
+    let selectionStartY: number = $state(0);
+    let selectionEndX: number = $state(0);
+    let selectionEndY: number = $state(0);
+    let hasSelection: boolean = $state(false);
+    let clipboard: ImageData | null = $state(null);
+    let isMovingSelection: boolean = $state(false);
+    let floatingSelection: {
+        imageData: ImageData;
+        x: number;
+        y: number;
+    } | null = $state(null);
+    let moveStartX: number = $state(0);
+    let moveStartY: number = $state(0);
 
     // Shape tool state
     let selectedShape: string = $state("diamond");
@@ -127,6 +150,237 @@
             e.preventDefault();
             redo();
         }
+        // Selection shortcuts
+        if ((e.ctrlKey || e.metaKey) && e.key === "c") {
+            e.preventDefault();
+            copySelection();
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === "x") {
+            e.preventDefault();
+            cutSelection();
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === "v") {
+            e.preventDefault();
+            pasteSelection();
+        }
+        if (e.key === "Delete" || e.key === "Backspace") {
+            if (hasSelection || floatingSelection) {
+                e.preventDefault();
+                deleteSelection();
+            }
+        }
+        if (e.key === "Escape") {
+            if (hasSelection || floatingSelection) {
+                e.preventDefault();
+                commitFloatingSelection();
+                clearSelection();
+            }
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === "a") {
+            if (tool === "select") {
+                e.preventDefault();
+                selectAll();
+            }
+        }
+    }
+
+    // Selection functions
+    function getSelectionRect(): {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    } {
+        const x = Math.min(selectionStartX, selectionEndX);
+        const y = Math.min(selectionStartY, selectionEndY);
+        const width = Math.abs(selectionEndX - selectionStartX) + 1;
+        const height = Math.abs(selectionEndY - selectionStartY) + 1;
+        return { x, y, width, height };
+    }
+
+    function isInsideSelection(px: number, py: number): boolean {
+        if (!hasSelection && !floatingSelection) return false;
+        if (floatingSelection) {
+            return (
+                px >= floatingSelection.x &&
+                px < floatingSelection.x + floatingSelection.imageData.width &&
+                py >= floatingSelection.y &&
+                py < floatingSelection.y + floatingSelection.imageData.height
+            );
+        }
+        const rect = getSelectionRect();
+        return (
+            px >= rect.x &&
+            px < rect.x + rect.width &&
+            py >= rect.y &&
+            py < rect.y + rect.height
+        );
+    }
+
+    function copySelection() {
+        if (!ctx) return;
+        if (floatingSelection) {
+            clipboard = new ImageData(
+                new Uint8ClampedArray(floatingSelection.imageData.data),
+                floatingSelection.imageData.width,
+                floatingSelection.imageData.height,
+            );
+            return;
+        }
+        if (!hasSelection) return;
+        const rect = getSelectionRect();
+        clipboard = ctx.getImageData(rect.x, rect.y, rect.width, rect.height);
+    }
+
+    function cutSelection() {
+        if (!ctx) return;
+        if (floatingSelection) {
+            clipboard = new ImageData(
+                new Uint8ClampedArray(floatingSelection.imageData.data),
+                floatingSelection.imageData.width,
+                floatingSelection.imageData.height,
+            );
+            floatingSelection = null;
+            clearSelection();
+            drawSelectionOverlay();
+            updatePreview();
+            return;
+        }
+        if (!hasSelection) return;
+        saveState();
+        const rect = getSelectionRect();
+        clipboard = ctx.getImageData(rect.x, rect.y, rect.width, rect.height);
+        ctx.clearRect(rect.x, rect.y, rect.width, rect.height);
+        clearSelection();
+        updatePreview();
+    }
+
+    function pasteSelection() {
+        if (!ctx || !clipboard) return;
+        commitFloatingSelection();
+        // Create floating selection at center of viewport or at origin
+        floatingSelection = {
+            imageData: new ImageData(
+                new Uint8ClampedArray(clipboard.data),
+                clipboard.width,
+                clipboard.height,
+            ),
+            x: 0,
+            y: 0,
+        };
+        hasSelection = false;
+        drawSelectionOverlay();
+    }
+
+    function deleteSelection() {
+        if (!ctx) return;
+        if (floatingSelection) {
+            floatingSelection = null;
+            clearSelection();
+            drawSelectionOverlay();
+            return;
+        }
+        if (!hasSelection) return;
+        saveState();
+        const rect = getSelectionRect();
+        ctx.clearRect(rect.x, rect.y, rect.width, rect.height);
+        clearSelection();
+        updatePreview();
+    }
+
+    function selectAll() {
+        selectionStartX = 0;
+        selectionStartY = 0;
+        selectionEndX = canvasWidth - 1;
+        selectionEndY = canvasHeight - 1;
+        hasSelection = true;
+        drawSelectionOverlay();
+    }
+
+    function clearSelection() {
+        hasSelection = false;
+        selectionStartX = 0;
+        selectionStartY = 0;
+        selectionEndX = 0;
+        selectionEndY = 0;
+        drawSelectionOverlay();
+    }
+
+    function commitFloatingSelection() {
+        if (!ctx || !floatingSelection) return;
+        saveState();
+        ctx.putImageData(
+            floatingSelection.imageData,
+            floatingSelection.x,
+            floatingSelection.y,
+        );
+        floatingSelection = null;
+        updatePreview();
+    }
+
+    function drawSelectionOverlay() {
+        if (!gridCtx) return;
+        clearGridCanvas();
+        if (showGrid) drawGrid();
+
+        // Draw floating selection if exists
+        if (floatingSelection) {
+            gridCtx.putImageData(
+                floatingSelection.imageData,
+                floatingSelection.x,
+                floatingSelection.y,
+            );
+            // Draw marching ants around floating selection
+            gridCtx.strokeStyle = "#000";
+            gridCtx.lineWidth = 1;
+            gridCtx.setLineDash([4, 4]);
+            gridCtx.strokeRect(
+                floatingSelection.x + 0.5,
+                floatingSelection.y + 0.5,
+                floatingSelection.imageData.width - 1,
+                floatingSelection.imageData.height - 1,
+            );
+            gridCtx.strokeStyle = "#fff";
+            gridCtx.lineDashOffset = 4;
+            gridCtx.strokeRect(
+                floatingSelection.x + 0.5,
+                floatingSelection.y + 0.5,
+                floatingSelection.imageData.width - 1,
+                floatingSelection.imageData.height - 1,
+            );
+            gridCtx.setLineDash([]);
+            gridCtx.lineDashOffset = 0;
+            return;
+        }
+
+        if (!hasSelection && !isSelecting) return;
+
+        const rect = getSelectionRect();
+
+        // Draw marching ants selection border
+        gridCtx.strokeStyle = "#000";
+        gridCtx.lineWidth = 1;
+        gridCtx.setLineDash([4, 4]);
+        gridCtx.strokeRect(
+            rect.x + 0.5,
+            rect.y + 0.5,
+            rect.width - 1,
+            rect.height - 1,
+        );
+        gridCtx.strokeStyle = "#fff";
+        gridCtx.lineDashOffset = 4;
+        gridCtx.strokeRect(
+            rect.x + 0.5,
+            rect.y + 0.5,
+            rect.width - 1,
+            rect.height - 1,
+        );
+        gridCtx.setLineDash([]);
+        gridCtx.lineDashOffset = 0;
+
+        // Draw semi-transparent fill
+        gridCtx.fillStyle = "rgba(100, 108, 255, 0.1)";
+        gridCtx.fillRect(rect.x, rect.y, rect.width, rect.height);
     }
 
     function snapToIsometricAngle(
@@ -567,7 +821,53 @@
 
         const { x, y } = getCanvasCoordinates(e);
 
-        if (tool === "pixel") {
+        if (tool === "select") {
+            // Check if clicking inside floating selection to move it
+            if (floatingSelection && isInsideSelection(x, y)) {
+                isMovingSelection = true;
+                moveStartX = x - floatingSelection.x;
+                moveStartY = y - floatingSelection.y;
+                return;
+            }
+            // Check if clicking inside existing selection to convert to floating and move
+            if (hasSelection && isInsideSelection(x, y)) {
+                // Convert selection to floating selection
+                const rect = getSelectionRect();
+                if (ctx) {
+                    const selectionData = ctx.getImageData(
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                    );
+                    saveState();
+                    ctx.clearRect(rect.x, rect.y, rect.width, rect.height);
+                    floatingSelection = {
+                        imageData: selectionData,
+                        x: rect.x,
+                        y: rect.y,
+                    };
+                    hasSelection = false;
+                    isMovingSelection = true;
+                    moveStartX = x - floatingSelection.x;
+                    moveStartY = y - floatingSelection.y;
+                    updatePreview();
+                    drawSelectionOverlay();
+                }
+                return;
+            }
+            // Commit any floating selection before starting new selection
+            commitFloatingSelection();
+            // Start new selection
+            isSelecting = true;
+            selectionStartX = x;
+            selectionStartY = y;
+            selectionEndX = x;
+            selectionEndY = y;
+            hasSelection = false;
+            drawSelectionOverlay();
+            return;
+        } else if (tool === "pixel") {
             saveState();
             isDrawing = true;
             paintPixel(x, y);
@@ -610,7 +910,20 @@
 
         const { x, y } = getCanvasCoordinates(e);
 
-        if (tool === "pixel" && isDrawing) {
+        if (tool === "select") {
+            if (isMovingSelection && floatingSelection) {
+                floatingSelection.x = x - moveStartX;
+                floatingSelection.y = y - moveStartY;
+                drawSelectionOverlay();
+                return;
+            }
+            if (isSelecting) {
+                selectionEndX = Math.max(0, Math.min(canvasWidth - 1, x));
+                selectionEndY = Math.max(0, Math.min(canvasHeight - 1, y));
+                drawSelectionOverlay();
+                return;
+            }
+        } else if (tool === "pixel" && isDrawing) {
             paintPixel(x, y);
         } else if (tool === "line" && isDrawingLine) {
             const snapped = snapToIsometricAngle(lineStartX, lineStartY, x, y);
@@ -630,7 +943,21 @@
             return;
         }
 
-        if (tool === "pixel") {
+        if (tool === "select") {
+            if (isMovingSelection) {
+                isMovingSelection = false;
+                return;
+            }
+            if (isSelecting) {
+                isSelecting = false;
+                const rect = getSelectionRect();
+                if (rect.width > 1 || rect.height > 1) {
+                    hasSelection = true;
+                }
+                drawSelectionOverlay();
+                return;
+            }
+        } else if (tool === "pixel") {
             isDrawing = false;
         } else if (tool === "line" && isDrawingLine) {
             isDrawingLine = false;
@@ -653,6 +980,8 @@
     function handleMouseLeave() {
         isDrawing = false;
         isPanning = false;
+        isSelecting = false;
+        isMovingSelection = false;
         if (isDrawingLine) {
             isDrawingLine = false;
             clearGridCanvas();
@@ -840,6 +1169,13 @@
         <div class="toolbar">
             <div class="tool-group">
                 <span class="group-label">Tool:</span>
+                <button
+                    class:active={tool === "select"}
+                    onclick={() => (tool = "select")}
+                    title="Select (M)"
+                >
+                    Select
+                </button>
                 <button
                     class:active={tool === "pixel"}
                     onclick={() => (tool = "pixel")}
@@ -1089,6 +1425,7 @@
                     class:pan-cursor={tool === "pan"}
                     class:fill-cursor={tool === "fill" || tool === "replace"}
                     class:shape-cursor={tool === "shape"}
+                    class:select-cursor={tool === "select"}
                     onmousedown={handleMouseDown}
                     onmousemove={handleMouseMove}
                     onmouseup={handleMouseUp}
@@ -1144,7 +1481,20 @@
             <div class="sidebar-section">
                 <div class="sidebar-header">Help</div>
                 <div class="help-content">
-                    {#if tool === "pixel"}
+                    {#if tool === "select"}
+                        <p>
+                            Drag to select an area. Click inside selection to
+                            move it.
+                        </p>
+                        <p class="shortcuts">
+                            <strong>Ctrl+C</strong> Copy<br />
+                            <strong>Ctrl+X</strong> Cut<br />
+                            <strong>Ctrl+V</strong> Paste<br />
+                            <strong>Delete</strong> Delete<br />
+                            <strong>Ctrl+A</strong> Select all<br />
+                            <strong>Esc</strong> Deselect
+                        </p>
+                    {:else if tool === "pixel"}
                         <p>Click and drag to paint pixels.</p>
                     {:else if tool === "line"}
                         <p>
@@ -1394,6 +1744,10 @@
         cursor: copy;
     }
 
+    .grid-canvas.select-cursor {
+        cursor: crosshair;
+    }
+
     /* Sidebar */
     .sidebar {
         width: 200px;
@@ -1476,7 +1830,21 @@
     }
 
     .help-content p {
-        margin: 0;
+        margin: 0 0 8px 0;
+    }
+
+    .help-content p:last-child {
+        margin-bottom: 0;
+    }
+
+    .help-content .shortcuts {
+        font-size: 0.7rem;
+        line-height: 1.6;
+    }
+
+    .help-content .shortcuts strong {
+        color: #aaa;
+        font-weight: 500;
     }
 
     /* Status Bar */
