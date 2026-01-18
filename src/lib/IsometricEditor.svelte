@@ -50,7 +50,8 @@
         | "fill"
         | "replace"
         | "shape"
-        | "select" = $state("pixel");
+        | "select"
+        | "lasso" = $state("pixel");
     let brushSize: number = $state(1);
 
     // Selection tool state
@@ -69,6 +70,18 @@
     } | null = $state(null);
     let moveStartX: number = $state(0);
     let moveStartY: number = $state(0);
+
+    // Lasso tool state
+    let isLassoing: boolean = $state(false);
+    let lassoPoints: { x: number; y: number }[] = $state([]);
+    let lassoMask: boolean[][] | null = $state(null);
+    let lassoImageData: ImageData | null = $state(null);
+    let lassoBounds: {
+        minX: number;
+        minY: number;
+        maxX: number;
+        maxY: number;
+    } | null = $state(null);
 
     // Shape tool state
     let selectedShape: string = $state("diamond");
@@ -150,27 +163,71 @@
             e.preventDefault();
             redo();
         }
-        // Selection shortcuts
+        // Selection shortcuts (works for both select and lasso tools)
         if ((e.ctrlKey || e.metaKey) && e.key === "c") {
             e.preventDefault();
-            copySelection();
+            if (tool === "lasso" && (lassoMask || floatingSelection)) {
+                if (floatingSelection) {
+                    clipboard = new ImageData(
+                        new Uint8ClampedArray(floatingSelection.imageData.data),
+                        floatingSelection.imageData.width,
+                        floatingSelection.imageData.height,
+                    );
+                } else {
+                    extractLassoSelection();
+                    copyLassoSelection();
+                }
+            } else {
+                copySelection();
+            }
         }
         if ((e.ctrlKey || e.metaKey) && e.key === "x") {
             e.preventDefault();
-            cutSelection();
+            if (tool === "lasso" && (lassoMask || floatingSelection)) {
+                if (floatingSelection) {
+                    clipboard = new ImageData(
+                        new Uint8ClampedArray(floatingSelection.imageData.data),
+                        floatingSelection.imageData.width,
+                        floatingSelection.imageData.height,
+                    );
+                    floatingSelection = null;
+                    clearLassoSelection();
+                    updatePreview();
+                } else {
+                    cutLassoSelection();
+                }
+            } else {
+                cutSelection();
+            }
         }
         if ((e.ctrlKey || e.metaKey) && e.key === "v") {
             e.preventDefault();
+            if (tool === "lasso") {
+                commitFloatingSelection();
+                clearLassoSelection();
+            }
             pasteSelection();
         }
         if (e.key === "Delete" || e.key === "Backspace") {
-            if (hasSelection || floatingSelection) {
+            if (tool === "lasso" && (lassoMask || floatingSelection)) {
+                e.preventDefault();
+                if (floatingSelection) {
+                    floatingSelection = null;
+                    clearLassoSelection();
+                } else {
+                    deleteLassoSelection();
+                }
+            } else if (hasSelection || floatingSelection) {
                 e.preventDefault();
                 deleteSelection();
             }
         }
         if (e.key === "Escape") {
-            if (hasSelection || floatingSelection) {
+            if (tool === "lasso" && (lassoMask || floatingSelection)) {
+                e.preventDefault();
+                commitFloatingSelection();
+                clearLassoSelection();
+            } else if (hasSelection || floatingSelection) {
                 e.preventDefault();
                 commitFloatingSelection();
                 clearSelection();
@@ -381,6 +438,328 @@
         // Draw semi-transparent fill
         gridCtx.fillStyle = "rgba(100, 108, 255, 0.1)";
         gridCtx.fillRect(rect.x, rect.y, rect.width, rect.height);
+    }
+
+    // Lasso functions
+    function drawLassoOverlay() {
+        if (!gridCtx) return;
+        clearGridCanvas();
+        if (showGrid) drawGrid();
+
+        // Draw floating selection if exists (from lasso)
+        if (floatingSelection) {
+            gridCtx.putImageData(
+                floatingSelection.imageData,
+                floatingSelection.x,
+                floatingSelection.y,
+            );
+            // Draw marching ants around floating selection
+            gridCtx.strokeStyle = "#000";
+            gridCtx.lineWidth = 1;
+            gridCtx.setLineDash([4, 4]);
+            gridCtx.strokeRect(
+                floatingSelection.x + 0.5,
+                floatingSelection.y + 0.5,
+                floatingSelection.imageData.width - 1,
+                floatingSelection.imageData.height - 1,
+            );
+            gridCtx.strokeStyle = "#fff";
+            gridCtx.lineDashOffset = 4;
+            gridCtx.strokeRect(
+                floatingSelection.x + 0.5,
+                floatingSelection.y + 0.5,
+                floatingSelection.imageData.width - 1,
+                floatingSelection.imageData.height - 1,
+            );
+            gridCtx.setLineDash([]);
+            gridCtx.lineDashOffset = 0;
+            return;
+        }
+
+        // Draw lasso path while drawing
+        if (isLassoing && lassoPoints.length > 1) {
+            gridCtx.strokeStyle = "#000";
+            gridCtx.lineWidth = 1;
+            gridCtx.setLineDash([4, 4]);
+            gridCtx.beginPath();
+            gridCtx.moveTo(lassoPoints[0].x + 0.5, lassoPoints[0].y + 0.5);
+            for (let i = 1; i < lassoPoints.length; i++) {
+                gridCtx.lineTo(lassoPoints[i].x + 0.5, lassoPoints[i].y + 0.5);
+            }
+            gridCtx.stroke();
+
+            gridCtx.strokeStyle = "#fff";
+            gridCtx.lineDashOffset = 4;
+            gridCtx.beginPath();
+            gridCtx.moveTo(lassoPoints[0].x + 0.5, lassoPoints[0].y + 0.5);
+            for (let i = 1; i < lassoPoints.length; i++) {
+                gridCtx.lineTo(lassoPoints[i].x + 0.5, lassoPoints[i].y + 0.5);
+            }
+            gridCtx.stroke();
+            gridCtx.setLineDash([]);
+            gridCtx.lineDashOffset = 0;
+        }
+
+        // Draw completed lasso selection with mask
+        if (lassoMask && lassoBounds) {
+            // Draw marching ants outline
+            gridCtx.strokeStyle = "#000";
+            gridCtx.lineWidth = 1;
+            gridCtx.setLineDash([4, 4]);
+
+            // Draw the polygon outline
+            if (lassoPoints.length > 2) {
+                gridCtx.beginPath();
+                gridCtx.moveTo(lassoPoints[0].x + 0.5, lassoPoints[0].y + 0.5);
+                for (let i = 1; i < lassoPoints.length; i++) {
+                    gridCtx.lineTo(
+                        lassoPoints[i].x + 0.5,
+                        lassoPoints[i].y + 0.5,
+                    );
+                }
+                gridCtx.closePath();
+                gridCtx.stroke();
+
+                gridCtx.strokeStyle = "#fff";
+                gridCtx.lineDashOffset = 4;
+                gridCtx.beginPath();
+                gridCtx.moveTo(lassoPoints[0].x + 0.5, lassoPoints[0].y + 0.5);
+                for (let i = 1; i < lassoPoints.length; i++) {
+                    gridCtx.lineTo(
+                        lassoPoints[i].x + 0.5,
+                        lassoPoints[i].y + 0.5,
+                    );
+                }
+                gridCtx.closePath();
+                gridCtx.stroke();
+            }
+
+            gridCtx.setLineDash([]);
+            gridCtx.lineDashOffset = 0;
+
+            // Draw semi-transparent fill for selected area
+            gridCtx.fillStyle = "rgba(100, 108, 255, 0.15)";
+            for (let y = lassoBounds.minY; y <= lassoBounds.maxY; y++) {
+                for (let x = lassoBounds.minX; x <= lassoBounds.maxX; x++) {
+                    if (lassoMask[y] && lassoMask[y][x]) {
+                        gridCtx.fillRect(x, y, 1, 1);
+                    }
+                }
+            }
+        }
+    }
+
+    function pointInPolygon(
+        x: number,
+        y: number,
+        polygon: { x: number; y: number }[],
+    ): boolean {
+        let inside = false;
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+            const xi = polygon[i].x,
+                yi = polygon[i].y;
+            const xj = polygon[j].x,
+                yj = polygon[j].y;
+            if (
+                yi > y !== yj > y &&
+                x < ((xj - xi) * (y - yi)) / (yj - yi) + xi
+            ) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    }
+
+    function createLassoMask(): void {
+        if (lassoPoints.length < 3) return;
+
+        // Calculate bounds
+        let minX = canvasWidth,
+            minY = canvasHeight,
+            maxX = 0,
+            maxY = 0;
+        for (const point of lassoPoints) {
+            minX = Math.min(minX, point.x);
+            minY = Math.min(minY, point.y);
+            maxX = Math.max(maxX, point.x);
+            maxY = Math.max(maxY, point.y);
+        }
+
+        // Clamp to canvas bounds
+        minX = Math.max(0, minX);
+        minY = Math.max(0, minY);
+        maxX = Math.min(canvasWidth - 1, maxX);
+        maxY = Math.min(canvasHeight - 1, maxY);
+
+        lassoBounds = { minX, minY, maxX, maxY };
+
+        // Create mask using point-in-polygon test
+        lassoMask = [];
+        for (let y = 0; y < canvasHeight; y++) {
+            lassoMask[y] = [];
+            for (let x = 0; x < canvasWidth; x++) {
+                if (x >= minX && x <= maxX && y >= minY && y <= maxY) {
+                    lassoMask[y][x] = pointInPolygon(x, y, lassoPoints);
+                } else {
+                    lassoMask[y][x] = false;
+                }
+            }
+        }
+    }
+
+    function extractLassoSelection(): void {
+        if (!ctx || !lassoMask || !lassoBounds) return;
+
+        const { minX, minY, maxX, maxY } = lassoBounds;
+        const width = maxX - minX + 1;
+        const height = maxY - minY + 1;
+
+        // Get the image data for the bounding box
+        const sourceData = ctx.getImageData(minX, minY, width, height);
+
+        // Create new image data with only the masked pixels
+        const newData = new ImageData(width, height);
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const canvasX = minX + x;
+                const canvasY = minY + y;
+                if (lassoMask[canvasY] && lassoMask[canvasY][canvasX]) {
+                    const srcIdx = (y * width + x) * 4;
+                    newData.data[srcIdx] = sourceData.data[srcIdx];
+                    newData.data[srcIdx + 1] = sourceData.data[srcIdx + 1];
+                    newData.data[srcIdx + 2] = sourceData.data[srcIdx + 2];
+                    newData.data[srcIdx + 3] = sourceData.data[srcIdx + 3];
+                }
+            }
+        }
+
+        lassoImageData = newData;
+    }
+
+    function copyLassoSelection(): void {
+        if (!lassoImageData) return;
+        clipboard = new ImageData(
+            new Uint8ClampedArray(lassoImageData.data),
+            lassoImageData.width,
+            lassoImageData.height,
+        );
+    }
+
+    function cutLassoSelection(): void {
+        if (!ctx || !lassoMask || !lassoBounds) return;
+
+        extractLassoSelection();
+        copyLassoSelection();
+
+        saveState();
+
+        // Clear the masked area on canvas
+        const { minX, minY, maxX, maxY } = lassoBounds;
+        const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+
+        for (let y = minY; y <= maxY; y++) {
+            for (let x = minX; x <= maxX; x++) {
+                if (lassoMask[y] && lassoMask[y][x]) {
+                    const idx = (y * canvasWidth + x) * 4;
+                    imageData.data[idx] = 0;
+                    imageData.data[idx + 1] = 0;
+                    imageData.data[idx + 2] = 0;
+                    imageData.data[idx + 3] = 0;
+                }
+            }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+        clearLassoSelection();
+        updatePreview();
+    }
+
+    function deleteLassoSelection(): void {
+        if (!ctx || !lassoMask || !lassoBounds) return;
+
+        saveState();
+
+        const { minX, minY, maxX, maxY } = lassoBounds;
+        const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+
+        for (let y = minY; y <= maxY; y++) {
+            for (let x = minX; x <= maxX; x++) {
+                if (lassoMask[y] && lassoMask[y][x]) {
+                    const idx = (y * canvasWidth + x) * 4;
+                    imageData.data[idx] = 0;
+                    imageData.data[idx + 1] = 0;
+                    imageData.data[idx + 2] = 0;
+                    imageData.data[idx + 3] = 0;
+                }
+            }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+        clearLassoSelection();
+        updatePreview();
+    }
+
+    function moveLassoToFloating(): void {
+        if (!ctx || !lassoMask || !lassoBounds || !lassoImageData) return;
+
+        saveState();
+
+        // Clear the original area
+        const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+        const { minX, minY, maxX, maxY } = lassoBounds;
+
+        for (let y = minY; y <= maxY; y++) {
+            for (let x = minX; x <= maxX; x++) {
+                if (lassoMask[y] && lassoMask[y][x]) {
+                    const idx = (y * canvasWidth + x) * 4;
+                    imageData.data[idx] = 0;
+                    imageData.data[idx + 1] = 0;
+                    imageData.data[idx + 2] = 0;
+                    imageData.data[idx + 3] = 0;
+                }
+            }
+        }
+        ctx.putImageData(imageData, 0, 0);
+
+        // Create floating selection
+        floatingSelection = {
+            imageData: new ImageData(
+                new Uint8ClampedArray(lassoImageData.data),
+                lassoImageData.width,
+                lassoImageData.height,
+            ),
+            x: minX,
+            y: minY,
+        };
+
+        // Clear lasso state but keep points for reference
+        lassoMask = null;
+        lassoImageData = null;
+        lassoBounds = null;
+
+        updatePreview();
+    }
+
+    function clearLassoSelection(): void {
+        lassoPoints = [];
+        lassoMask = null;
+        lassoImageData = null;
+        lassoBounds = null;
+        drawLassoOverlay();
+    }
+
+    function isInsideLassoSelection(px: number, py: number): boolean {
+        if (floatingSelection) {
+            return (
+                px >= floatingSelection.x &&
+                px < floatingSelection.x + floatingSelection.imageData.width &&
+                py >= floatingSelection.y &&
+                py < floatingSelection.y + floatingSelection.imageData.height
+            );
+        }
+        if (!lassoMask) return false;
+        return lassoMask[py] && lassoMask[py][px];
     }
 
     function snapToIsometricAngle(
@@ -867,6 +1246,34 @@
             hasSelection = false;
             drawSelectionOverlay();
             return;
+        } else if (tool === "lasso") {
+            // Check if clicking inside floating selection to move it
+            if (floatingSelection && isInsideLassoSelection(x, y)) {
+                isMovingSelection = true;
+                moveStartX = x - floatingSelection.x;
+                moveStartY = y - floatingSelection.y;
+                return;
+            }
+            // Check if clicking inside existing lasso selection to move it
+            if (lassoMask && isInsideLassoSelection(x, y)) {
+                extractLassoSelection();
+                moveLassoToFloating();
+                isMovingSelection = true;
+                if (floatingSelection) {
+                    moveStartX = x - floatingSelection.x;
+                    moveStartY = y - floatingSelection.y;
+                }
+                drawLassoOverlay();
+                return;
+            }
+            // Commit any floating selection before starting new lasso
+            commitFloatingSelection();
+            clearLassoSelection();
+            // Start new lasso
+            isLassoing = true;
+            lassoPoints = [{ x, y }];
+            drawLassoOverlay();
+            return;
         } else if (tool === "pixel") {
             saveState();
             isDrawing = true;
@@ -923,6 +1330,22 @@
                 drawSelectionOverlay();
                 return;
             }
+        } else if (tool === "lasso") {
+            if (isMovingSelection && floatingSelection) {
+                floatingSelection.x = x - moveStartX;
+                floatingSelection.y = y - moveStartY;
+                drawLassoOverlay();
+                return;
+            }
+            if (isLassoing) {
+                // Add point if it's different from last point (avoid duplicates)
+                const lastPoint = lassoPoints[lassoPoints.length - 1];
+                if (lastPoint.x !== x || lastPoint.y !== y) {
+                    lassoPoints = [...lassoPoints, { x, y }];
+                    drawLassoOverlay();
+                }
+                return;
+            }
         } else if (tool === "pixel" && isDrawing) {
             paintPixel(x, y);
         } else if (tool === "line" && isDrawingLine) {
@@ -957,6 +1380,20 @@
                 drawSelectionOverlay();
                 return;
             }
+        } else if (tool === "lasso") {
+            if (isMovingSelection) {
+                isMovingSelection = false;
+                return;
+            }
+            if (isLassoing) {
+                isLassoing = false;
+                if (lassoPoints.length >= 3) {
+                    createLassoMask();
+                    extractLassoSelection();
+                }
+                drawLassoOverlay();
+                return;
+            }
         } else if (tool === "pixel") {
             isDrawing = false;
         } else if (tool === "line" && isDrawingLine) {
@@ -982,6 +1419,7 @@
         isPanning = false;
         isSelecting = false;
         isMovingSelection = false;
+        isLassoing = false;
         if (isDrawingLine) {
             isDrawingLine = false;
             clearGridCanvas();
@@ -1172,9 +1610,16 @@
                 <button
                     class:active={tool === "select"}
                     onclick={() => (tool = "select")}
-                    title="Select (M)"
+                    title="Rectangle Select (M)"
                 >
                     Select
+                </button>
+                <button
+                    class:active={tool === "lasso"}
+                    onclick={() => (tool = "lasso")}
+                    title="Lasso Select (L)"
+                >
+                    Lasso
                 </button>
                 <button
                     class:active={tool === "pixel"}
