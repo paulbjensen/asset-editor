@@ -10,6 +10,27 @@
         visible: boolean;
     }
 
+    // Saved image interface
+    interface SavedImage {
+        id: string;
+        name: string;
+        createdAt: number;
+        updatedAt: number;
+        width: number;
+        height: number;
+        layers: {
+            id: string;
+            name: string;
+            visible: boolean;
+            imageData: string; // base64
+        }[];
+        activeLayerIndex: number;
+        thumbnail: string; // base64 thumbnail for preview
+    }
+
+    // Storage key
+    const STORAGE_KEY = "isometric-editor-saved-images";
+
     // Canvas dimensions (now reactive)
     let canvasWidth: number = $state(512);
     let canvasHeight: number = $state(512);
@@ -23,6 +44,16 @@
 
     // Derived active layer context
     let activeCtx = $derived(layers[activeLayerIndex]?.ctx ?? null);
+
+    // Save/Load state
+    let savedImages: SavedImage[] = $state([]);
+    let currentImageId: string | null = $state(null);
+    let currentImageName: string | null = $state(null);
+    let showSaveModal: boolean = $state(false);
+    let showLoadModal: boolean = $state(false);
+    let saveAsMode: boolean = $state(false);
+    let saveNameInput: string = $state("");
+    let deleteConfirmId: string | null = $state(null);
 
     // Custom dimension inputs
     let customWidth: string = $state("512");
@@ -351,10 +382,274 @@
         dragOverLayerIndex = null;
     }
 
-    function handleKeyDown(e: KeyboardEvent) {
-        // Don't handle shortcuts when editing layer name
-        if (editingLayerId) return;
+    // Save/Load functions
+    function loadSavedImagesFromStorage(): void {
+        try {
+            const stored = localStorage.getItem(STORAGE_KEY);
+            if (stored) {
+                savedImages = JSON.parse(stored);
+            }
+        } catch (e) {
+            console.error("Failed to load saved images:", e);
+            savedImages = [];
+        }
+    }
 
+    function saveSavedImagesToStorage(): void {
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(savedImages));
+        } catch (e) {
+            console.error("Failed to save images to storage:", e);
+            alert("Failed to save. Storage may be full.");
+        }
+    }
+
+    function generateThumbnail(): string {
+        // Create a small thumbnail (64x64 max) of the current canvas
+        const thumbSize = 64;
+        const thumbCanvas = document.createElement("canvas");
+        const scale = Math.min(
+            thumbSize / canvasWidth,
+            thumbSize / canvasHeight,
+        );
+        thumbCanvas.width = Math.round(canvasWidth * scale);
+        thumbCanvas.height = Math.round(canvasHeight * scale);
+        const thumbCtx = thumbCanvas.getContext("2d")!;
+        thumbCtx.imageSmoothingEnabled = false;
+
+        // Draw composite of all visible layers
+        for (const layer of layers) {
+            if (layer.visible) {
+                thumbCtx.drawImage(
+                    layer.canvas,
+                    0,
+                    0,
+                    thumbCanvas.width,
+                    thumbCanvas.height,
+                );
+            }
+        }
+
+        return thumbCanvas.toDataURL("image/png");
+    }
+
+    function serializeCurrentImage(): Omit<
+        SavedImage,
+        "id" | "createdAt" | "updatedAt" | "name"
+    > {
+        const layerData = layers.map((layer) => ({
+            id: layer.id,
+            name: layer.name,
+            visible: layer.visible,
+            imageData: layer.canvas.toDataURL("image/png"),
+        }));
+
+        return {
+            width: canvasWidth,
+            height: canvasHeight,
+            layers: layerData,
+            activeLayerIndex,
+            thumbnail: generateThumbnail(),
+        };
+    }
+
+    function openSaveModal(asSaveAs: boolean = false): void {
+        saveAsMode = asSaveAs;
+        if (currentImageName && !asSaveAs) {
+            // Quick save - update existing
+            saveCurrentImage();
+        } else {
+            // Show modal to enter name
+            saveNameInput = currentImageName || "";
+            showSaveModal = true;
+        }
+    }
+
+    function closeSaveModal(): void {
+        showSaveModal = false;
+        saveNameInput = "";
+        saveAsMode = false;
+    }
+
+    function saveCurrentImage(): void {
+        const serialized = serializeCurrentImage();
+        const now = Date.now();
+
+        if (currentImageId && !saveAsMode) {
+            // Update existing image
+            const index = savedImages.findIndex(
+                (img) => img.id === currentImageId,
+            );
+            if (index !== -1) {
+                savedImages[index] = {
+                    ...savedImages[index],
+                    ...serialized,
+                    updatedAt: now,
+                };
+                savedImages = [...savedImages];
+                saveSavedImagesToStorage();
+                closeSaveModal();
+                return;
+            }
+        }
+
+        // Create new image
+        const newImage: SavedImage = {
+            id: `img-${now}-${Math.random().toString(36).substring(2, 9)}`,
+            name: saveNameInput.trim() || `Untitled ${savedImages.length + 1}`,
+            createdAt: now,
+            updatedAt: now,
+            ...serialized,
+        };
+
+        savedImages = [...savedImages, newImage];
+        currentImageId = newImage.id;
+        currentImageName = newImage.name;
+        saveSavedImagesToStorage();
+        closeSaveModal();
+    }
+
+    function openLoadModal(): void {
+        loadSavedImagesFromStorage();
+        showLoadModal = true;
+        deleteConfirmId = null;
+    }
+
+    function closeLoadModal(): void {
+        showLoadModal = false;
+        deleteConfirmId = null;
+    }
+
+    function loadImage(image: SavedImage): void {
+        // Clear current layers
+        layers = [];
+
+        // Resize canvas if needed
+        if (canvasWidth !== image.width || canvasHeight !== image.height) {
+            canvasWidth = image.width;
+            canvasHeight = image.height;
+            customWidth = String(image.width);
+            customHeight = String(image.height);
+        }
+
+        // Recreate layers from saved data
+        const loadedLayers: Layer[] = [];
+
+        for (const savedLayer of image.layers) {
+            const layerCanvas = document.createElement("canvas");
+            layerCanvas.width = image.width;
+            layerCanvas.height = image.height;
+            const layerCtx = layerCanvas.getContext("2d")!;
+            layerCtx.imageSmoothingEnabled = false;
+
+            // Load image data
+            const img = new Image();
+            img.onload = () => {
+                layerCtx.drawImage(img, 0, 0);
+                compositeAndRender();
+            };
+            img.src = savedLayer.imageData;
+
+            loadedLayers.push({
+                id: savedLayer.id,
+                name: savedLayer.name,
+                canvas: layerCanvas,
+                ctx: layerCtx,
+                visible: savedLayer.visible,
+            });
+        }
+
+        layers = loadedLayers;
+        activeLayerIndex = Math.min(
+            image.activeLayerIndex,
+            loadedLayers.length - 1,
+        );
+        currentImageId = image.id;
+        currentImageName = image.name;
+
+        // Clear undo/redo stacks
+        undoStack = [];
+        redoStack = [];
+
+        closeLoadModal();
+
+        // Trigger composite after images load
+        setTimeout(() => {
+            compositeAndRender();
+        }, 100);
+    }
+
+    function confirmDeleteImage(id: string): void {
+        deleteConfirmId = id;
+    }
+
+    function cancelDeleteImage(): void {
+        deleteConfirmId = null;
+    }
+
+    function deleteImage(id: string): void {
+        savedImages = savedImages.filter((img) => img.id !== id);
+        saveSavedImagesToStorage();
+
+        // If we deleted the currently loaded image, clear the reference
+        if (currentImageId === id) {
+            currentImageId = null;
+            currentImageName = null;
+        }
+
+        deleteConfirmId = null;
+    }
+
+    function formatDate(timestamp: number): string {
+        return new Date(timestamp).toLocaleDateString(undefined, {
+            year: "numeric",
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+        });
+    }
+
+    function newImage(): void {
+        // Clear current image
+        currentImageId = null;
+        currentImageName = null;
+
+        // Reset to default state
+        canvasWidth = 512;
+        canvasHeight = 512;
+        customWidth = "512";
+        customHeight = "512";
+
+        // Create fresh background layer
+        const initialLayer = createLayer("Background");
+        layers = [initialLayer];
+        activeLayerIndex = 0;
+
+        // Clear history
+        undoStack = [];
+        redoStack = [];
+
+        compositeAndRender();
+    }
+
+    function handleKeyDown(e: KeyboardEvent) {
+        // Don't handle shortcuts when editing layer name or in modals
+        if (editingLayerId || showSaveModal || showLoadModal) return;
+
+        // Save shortcuts
+        if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+            e.preventDefault();
+            if (e.shiftKey) {
+                openSaveModal(true); // Save As
+            } else {
+                openSaveModal(false); // Save
+            }
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === "o") {
+            e.preventDefault();
+            openLoadModal();
+        }
         if ((e.ctrlKey || e.metaKey) && e.key === "z") {
             e.preventDefault();
             if (e.shiftKey) {
@@ -1871,6 +2166,9 @@
         layers = [initialLayer];
         activeLayerIndex = 0;
 
+        // Load saved images list from localStorage
+        loadSavedImagesFromStorage();
+
         window.addEventListener("keydown", handleKeyDown);
 
         return () => {
@@ -1989,12 +2287,35 @@
             <div class="toolbar-divider"></div>
 
             <div class="tool-group">
+                <button onclick={newImage} title="New image">New</button>
+                <button
+                    onclick={() => openSaveModal(false)}
+                    title="Save (Ctrl+S)">Save</button
+                >
+                <button
+                    onclick={() => openSaveModal(true)}
+                    title="Save As (Ctrl+Shift+S)">Save As</button
+                >
+                <button onclick={openLoadModal} title="Load (Ctrl+O)"
+                    >Load</button
+                >
+            </div>
+
+            <div class="toolbar-divider"></div>
+
+            <div class="tool-group">
                 <button onclick={clearCanvas}>Clear</button>
                 <button onclick={exportPNG} class="export-btn"
                     >Export PNG</button
                 >
             </div>
         </div>
+
+        {#if currentImageName}
+            <div class="current-file-indicator">
+                {currentImageName}
+            </div>
+        {/if}
 
         <div class="toolbar secondary">
             {#if tool === "shape"}
@@ -2352,6 +2673,172 @@
     </footer>
 </div>
 
+<!-- Save Modal -->
+{#if showSaveModal}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+        class="modal-overlay"
+        onclick={closeSaveModal}
+        onkeydown={(e) => e.key === "Escape" && closeSaveModal()}
+    >
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div
+            class="modal"
+            onclick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="save-modal-title"
+            tabindex="-1"
+        >
+            <div class="modal-header">
+                <h2 id="save-modal-title">
+                    {saveAsMode ? "Save As" : "Save Image"}
+                </h2>
+                <button class="modal-close" onclick={closeSaveModal}
+                    >&times;</button
+                >
+            </div>
+            <div class="modal-body">
+                <label for="save-name-input">Image Name:</label>
+                <!-- svelte-ignore a11y_autofocus -->
+                <input
+                    id="save-name-input"
+                    type="text"
+                    bind:value={saveNameInput}
+                    placeholder="Enter a name for your image"
+                    onkeydown={(e) => {
+                        if (e.key === "Enter" && saveNameInput.trim()) {
+                            saveCurrentImage();
+                        }
+                    }}
+                    autofocus
+                />
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn secondary" onclick={closeSaveModal}
+                    >Cancel</button
+                >
+                <button
+                    class="modal-btn primary"
+                    onclick={saveCurrentImage}
+                    disabled={!saveNameInput.trim()}
+                >
+                    Save
+                </button>
+            </div>
+        </div>
+    </div>
+{/if}
+
+<!-- Load Modal -->
+{#if showLoadModal}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+        class="modal-overlay"
+        onclick={closeLoadModal}
+        onkeydown={(e) => e.key === "Escape" && closeLoadModal()}
+    >
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div
+            class="modal modal-large"
+            onclick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="load-modal-title"
+            tabindex="-1"
+        >
+            <div class="modal-header">
+                <h2 id="load-modal-title">Load Image</h2>
+                <button class="modal-close" onclick={closeLoadModal}
+                    >&times;</button
+                >
+            </div>
+            <div class="modal-body">
+                {#if savedImages.length === 0}
+                    <div class="empty-state">
+                        <p>No saved images yet.</p>
+                        <p class="hint">
+                            Save your first image using the Save button or
+                            Ctrl+S.
+                        </p>
+                    </div>
+                {:else}
+                    <div class="saved-images-grid">
+                        {#each savedImages.sort((a, b) => b.updatedAt - a.updatedAt) as image}
+                            <div
+                                class="saved-image-card"
+                                class:current={image.id === currentImageId}
+                            >
+                                <div class="saved-image-preview">
+                                    <img
+                                        src={image.thumbnail}
+                                        alt={image.name}
+                                    />
+                                </div>
+                                <div class="saved-image-info">
+                                    <div
+                                        class="saved-image-name"
+                                        title={image.name}
+                                    >
+                                        {image.name}
+                                    </div>
+                                    <div class="saved-image-meta">
+                                        {image.width}x{image.height} &middot; {image
+                                            .layers.length} layer{image.layers
+                                            .length !== 1
+                                            ? "s"
+                                            : ""}
+                                    </div>
+                                    <div class="saved-image-date">
+                                        {formatDate(image.updatedAt)}
+                                    </div>
+                                </div>
+                                <div class="saved-image-actions">
+                                    {#if deleteConfirmId === image.id}
+                                        <div class="delete-confirm">
+                                            <span>Delete?</span>
+                                            <button
+                                                class="btn-confirm-delete"
+                                                onclick={() =>
+                                                    deleteImage(image.id)}
+                                                >Yes</button
+                                            >
+                                            <button
+                                                class="btn-cancel-delete"
+                                                onclick={cancelDeleteImage}
+                                                >No</button
+                                            >
+                                        </div>
+                                    {:else}
+                                        <button
+                                            class="btn-load"
+                                            onclick={() => loadImage(image)}
+                                            >Load</button
+                                        >
+                                        <button
+                                            class="btn-delete"
+                                            onclick={() =>
+                                                confirmDeleteImage(image.id)}
+                                            title="Delete"
+                                        >
+                                            &times;
+                                        </button>
+                                    {/if}
+                                </div>
+                            </div>
+                        {/each}
+                    </div>
+                {/if}
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn secondary" onclick={closeLoadModal}
+                    >Cancel</button
+                >
+            </div>
+        </div>
+    </div>
+{/if}
+
 <style>
     .editor-layout {
         display: flex;
@@ -2360,6 +2847,310 @@
         width: 100vw;
         overflow: hidden;
         background: #1a1a1a;
+    }
+
+    /* Current File Indicator */
+    .current-file-indicator {
+        padding: 4px 12px;
+        background: #333;
+        color: #aaa;
+        font-size: 0.75rem;
+        border-bottom: 1px solid #3a3a3a;
+    }
+
+    /* Modal Styles */
+    .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+    }
+
+    .modal {
+        background: #2a2a2a;
+        border-radius: 8px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        min-width: 350px;
+        max-width: 90vw;
+        max-height: 90vh;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .modal-large {
+        min-width: 500px;
+        width: 700px;
+    }
+
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 16px 20px;
+        border-bottom: 1px solid #3a3a3a;
+    }
+
+    .modal-header h2 {
+        margin: 0;
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: #eee;
+    }
+
+    .modal-close {
+        background: none;
+        border: none;
+        color: #888;
+        font-size: 1.5rem;
+        cursor: pointer;
+        padding: 0;
+        line-height: 1;
+    }
+
+    .modal-close:hover {
+        color: #fff;
+    }
+
+    .modal-body {
+        padding: 20px;
+        flex: 1;
+        overflow-y: auto;
+    }
+
+    .modal-body label {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 0.85rem;
+        color: #aaa;
+    }
+
+    .modal-body input[type="text"] {
+        width: 100%;
+        padding: 10px 12px;
+        font-size: 0.95rem;
+        border: 1px solid #4a4a4a;
+        border-radius: 4px;
+        background: #1a1a1a;
+        color: #eee;
+        outline: none;
+    }
+
+    .modal-body input[type="text"]:focus {
+        border-color: #646cff;
+    }
+
+    .modal-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        padding: 16px 20px;
+        border-top: 1px solid #3a3a3a;
+    }
+
+    .modal-btn {
+        padding: 8px 16px;
+        font-size: 0.85rem;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+
+    .modal-btn.secondary {
+        background: #3a3a3a;
+        border: 1px solid #4a4a4a;
+        color: #ccc;
+    }
+
+    .modal-btn.secondary:hover {
+        background: #4a4a4a;
+    }
+
+    .modal-btn.primary {
+        background: #646cff;
+        border: 1px solid #747bff;
+        color: #fff;
+    }
+
+    .modal-btn.primary:hover {
+        background: #747bff;
+    }
+
+    .modal-btn.primary:disabled {
+        background: #4a4a4a;
+        border-color: #4a4a4a;
+        color: #888;
+        cursor: not-allowed;
+    }
+
+    /* Load Modal - Saved Images Grid */
+    .empty-state {
+        text-align: center;
+        padding: 40px 20px;
+        color: #888;
+    }
+
+    .empty-state p {
+        margin: 0 0 8px 0;
+    }
+
+    .empty-state .hint {
+        font-size: 0.8rem;
+        color: #666;
+    }
+
+    .saved-images-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        max-height: 400px;
+        overflow-y: auto;
+    }
+
+    .saved-image-card {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px;
+        background: #333;
+        border-radius: 6px;
+        border: 1px solid #3a3a3a;
+        transition: all 0.15s;
+    }
+
+    .saved-image-card:hover {
+        background: #3a3a3a;
+        border-color: #4a4a4a;
+    }
+
+    .saved-image-card.current {
+        border-color: #646cff;
+        background: #35356a;
+    }
+
+    .saved-image-preview {
+        width: 64px;
+        height: 64px;
+        flex-shrink: 0;
+        background: repeating-conic-gradient(#3a3a3a 0% 25%, #2a2a2a 0% 50%)
+            50% / 8px 8px;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+    }
+
+    .saved-image-preview img {
+        max-width: 100%;
+        max-height: 100%;
+        image-rendering: pixelated;
+    }
+
+    .saved-image-info {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .saved-image-name {
+        font-size: 0.9rem;
+        font-weight: 500;
+        color: #eee;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .saved-image-meta {
+        font-size: 0.75rem;
+        color: #888;
+        margin-top: 2px;
+    }
+
+    .saved-image-date {
+        font-size: 0.7rem;
+        color: #666;
+        margin-top: 2px;
+    }
+
+    .saved-image-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+    }
+
+    .btn-load {
+        padding: 6px 12px;
+        font-size: 0.8rem;
+        background: #646cff;
+        border: none;
+        border-radius: 4px;
+        color: #fff;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+
+    .btn-load:hover {
+        background: #747bff;
+    }
+
+    .btn-delete {
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        font-size: 1.2rem;
+        line-height: 1;
+        background: none;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        color: #888;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+
+    .btn-delete:hover {
+        background: #ff4444;
+        color: #fff;
+        border-color: #ff4444;
+    }
+
+    .delete-confirm {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.8rem;
+        color: #ff6b6b;
+    }
+
+    .btn-confirm-delete,
+    .btn-cancel-delete {
+        padding: 4px 8px;
+        font-size: 0.75rem;
+        border-radius: 3px;
+        cursor: pointer;
+    }
+
+    .btn-confirm-delete {
+        background: #ff4444;
+        border: none;
+        color: #fff;
+    }
+
+    .btn-confirm-delete:hover {
+        background: #ff6666;
+    }
+
+    .btn-cancel-delete {
+        background: #3a3a3a;
+        border: 1px solid #4a4a4a;
+        color: #ccc;
+    }
+
+    .btn-cancel-delete:hover {
+        background: #4a4a4a;
     }
 
     /* Layers Sidebar */
@@ -2840,6 +3631,110 @@
     @media (prefers-color-scheme: light) {
         .editor-layout {
             background: #e5e5e5;
+        }
+
+        .current-file-indicator {
+            background: #ddd;
+            color: #666;
+            border-bottom-color: #ccc;
+        }
+
+        .modal-overlay {
+            background: rgba(0, 0, 0, 0.5);
+        }
+
+        .modal {
+            background: #fff;
+        }
+
+        .modal-header {
+            border-bottom-color: #ddd;
+        }
+
+        .modal-header h2 {
+            color: #333;
+        }
+
+        .modal-close {
+            color: #666;
+        }
+
+        .modal-close:hover {
+            color: #333;
+        }
+
+        .modal-body label {
+            color: #666;
+        }
+
+        .modal-body input[type="text"] {
+            background: #fff;
+            border-color: #ccc;
+            color: #333;
+        }
+
+        .modal-footer {
+            border-top-color: #ddd;
+        }
+
+        .modal-btn.secondary {
+            background: #e0e0e0;
+            border-color: #ccc;
+            color: #333;
+        }
+
+        .modal-btn.secondary:hover {
+            background: #d0d0d0;
+        }
+
+        .empty-state {
+            color: #666;
+        }
+
+        .empty-state .hint {
+            color: #888;
+        }
+
+        .saved-image-card {
+            background: #f5f5f5;
+            border-color: #ddd;
+        }
+
+        .saved-image-card:hover {
+            background: #eee;
+            border-color: #ccc;
+        }
+
+        .saved-image-card.current {
+            background: #e8e8ff;
+            border-color: #646cff;
+        }
+
+        .saved-image-preview {
+            background: repeating-conic-gradient(#ddd 0% 25%, #eee 0% 50%) 50% /
+                8px 8px;
+        }
+
+        .saved-image-name {
+            color: #333;
+        }
+
+        .saved-image-meta {
+            color: #666;
+        }
+
+        .saved-image-date {
+            color: #888;
+        }
+
+        .btn-delete {
+            color: #999;
+        }
+
+        .btn-cancel-delete {
+            background: #e0e0e0;
+            border-color: #ccc;
+            color: #333;
         }
 
         .layers-sidebar {
