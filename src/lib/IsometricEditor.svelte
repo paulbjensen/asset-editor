@@ -1,9 +1,28 @@
 <script lang="ts">
     import { onMount } from "svelte";
 
+    // Layer interface
+    interface Layer {
+        id: string;
+        name: string;
+        canvas: HTMLCanvasElement;
+        ctx: CanvasRenderingContext2D;
+        visible: boolean;
+    }
+
     // Canvas dimensions (now reactive)
     let canvasWidth: number = $state(512);
     let canvasHeight: number = $state(512);
+
+    // Layers state
+    let layers: Layer[] = $state([]);
+    let activeLayerIndex: number = $state(0);
+    let draggedLayerIndex: number | null = $state(null);
+    let dragOverLayerIndex: number | null = $state(null);
+    let editingLayerId: string | null = $state(null);
+
+    // Derived active layer context
+    let activeCtx = $derived(layers[activeLayerIndex]?.ctx ?? null);
 
     // Custom dimension inputs
     let customWidth: string = $state("512");
@@ -107,9 +126,13 @@
     let linePreviewEndX: number = $state(0);
     let linePreviewEndY: number = $state(0);
 
-    // Undo/Redo state
-    let undoStack: ImageData[] = $state([]);
-    let redoStack: ImageData[] = $state([]);
+    // Undo/Redo state - now stores per-layer state
+    interface HistoryState {
+        layerStates: { id: string; imageData: ImageData }[];
+        activeLayerIndex: number;
+    }
+    let undoStack: HistoryState[] = $state([]);
+    let redoStack: HistoryState[] = $state([]);
     const MAX_UNDO_STEPS = 50;
 
     // Pixel grid state - shows pixel boundaries when zoomed in
@@ -124,33 +147,214 @@
     ];
 
     function saveState() {
-        if (!ctx) return;
-        const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
-        undoStack = [...undoStack.slice(-(MAX_UNDO_STEPS - 1)), imageData];
+        if (layers.length === 0) return;
+        const layerStates = layers.map((layer) => ({
+            id: layer.id,
+            imageData: layer.ctx.getImageData(0, 0, canvasWidth, canvasHeight),
+        }));
+        const state: HistoryState = {
+            layerStates,
+            activeLayerIndex,
+        };
+        undoStack = [...undoStack.slice(-(MAX_UNDO_STEPS - 1)), state];
         redoStack = [];
     }
 
     function undo() {
-        if (!ctx || undoStack.length === 0) return;
-        const currentState = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+        if (undoStack.length === 0 || layers.length === 0) return;
+
+        // Save current state to redo stack
+        const currentLayerStates = layers.map((layer) => ({
+            id: layer.id,
+            imageData: layer.ctx.getImageData(0, 0, canvasWidth, canvasHeight),
+        }));
+        const currentState: HistoryState = {
+            layerStates: currentLayerStates,
+            activeLayerIndex,
+        };
         redoStack = [...redoStack, currentState];
+
+        // Restore previous state
         const previousState = undoStack[undoStack.length - 1];
         undoStack = undoStack.slice(0, -1);
-        ctx.putImageData(previousState, 0, 0);
-        updatePreview();
+
+        for (const layerState of previousState.layerStates) {
+            const layer = layers.find((l) => l.id === layerState.id);
+            if (layer) {
+                layer.ctx.putImageData(layerState.imageData, 0, 0);
+            }
+        }
+        activeLayerIndex = previousState.activeLayerIndex;
+        compositeAndRender();
     }
 
     function redo() {
-        if (!ctx || redoStack.length === 0) return;
-        const currentState = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+        if (redoStack.length === 0 || layers.length === 0) return;
+
+        // Save current state to undo stack
+        const currentLayerStates = layers.map((layer) => ({
+            id: layer.id,
+            imageData: layer.ctx.getImageData(0, 0, canvasWidth, canvasHeight),
+        }));
+        const currentState: HistoryState = {
+            layerStates: currentLayerStates,
+            activeLayerIndex,
+        };
         undoStack = [...undoStack, currentState];
+
+        // Restore next state
         const nextState = redoStack[redoStack.length - 1];
         redoStack = redoStack.slice(0, -1);
-        ctx.putImageData(nextState, 0, 0);
+
+        for (const layerState of nextState.layerStates) {
+            const layer = layers.find((l) => l.id === layerState.id);
+            if (layer) {
+                layer.ctx.putImageData(layerState.imageData, 0, 0);
+            }
+        }
+        activeLayerIndex = nextState.activeLayerIndex;
+        compositeAndRender();
+    }
+
+    // Layer management functions
+    function generateLayerId(): string {
+        return `layer-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    }
+
+    function createLayer(name?: string): Layer {
+        const layerCanvas = document.createElement("canvas");
+        layerCanvas.width = canvasWidth;
+        layerCanvas.height = canvasHeight;
+        const layerCtx = layerCanvas.getContext("2d")!;
+        layerCtx.imageSmoothingEnabled = false;
+
+        return {
+            id: generateLayerId(),
+            name: name || `Layer ${layers.length + 1}`,
+            canvas: layerCanvas,
+            ctx: layerCtx,
+            visible: true,
+        };
+    }
+
+    function addLayer() {
+        const newLayer = createLayer();
+        // Insert new layer above active layer
+        const newLayers = [...layers];
+        newLayers.splice(activeLayerIndex + 1, 0, newLayer);
+        layers = newLayers;
+        activeLayerIndex = activeLayerIndex + 1;
+        compositeAndRender();
+    }
+
+    function removeLayer(index: number) {
+        if (layers.length <= 1) return; // Don't allow removing last layer
+        const newLayers = layers.filter((_, i) => i !== index);
+        layers = newLayers;
+        // Adjust active layer index if needed
+        if (activeLayerIndex >= layers.length) {
+            activeLayerIndex = layers.length - 1;
+        } else if (activeLayerIndex > index) {
+            activeLayerIndex = activeLayerIndex - 1;
+        }
+        compositeAndRender();
+    }
+
+    function moveLayer(fromIndex: number, toIndex: number) {
+        if (fromIndex === toIndex) return;
+        if (fromIndex < 0 || fromIndex >= layers.length) return;
+        if (toIndex < 0 || toIndex >= layers.length) return;
+
+        const newLayers = [...layers];
+        const [movedLayer] = newLayers.splice(fromIndex, 1);
+        newLayers.splice(toIndex, 0, movedLayer);
+        layers = newLayers;
+
+        // Update active layer index to follow the previously active layer
+        if (activeLayerIndex === fromIndex) {
+            activeLayerIndex = toIndex;
+        } else if (
+            fromIndex < activeLayerIndex &&
+            toIndex >= activeLayerIndex
+        ) {
+            activeLayerIndex = activeLayerIndex - 1;
+        } else if (
+            fromIndex > activeLayerIndex &&
+            toIndex <= activeLayerIndex
+        ) {
+            activeLayerIndex = activeLayerIndex + 1;
+        }
+
+        compositeAndRender();
+    }
+
+    function toggleLayerVisibility(index: number) {
+        layers[index].visible = !layers[index].visible;
+        layers = [...layers]; // Trigger reactivity
+        compositeAndRender();
+    }
+
+    function renameLayer(index: number, newName: string) {
+        if (newName.trim()) {
+            layers[index].name = newName.trim();
+            layers = [...layers]; // Trigger reactivity
+        }
+        editingLayerId = null;
+    }
+
+    function setActiveLayer(index: number) {
+        if (index >= 0 && index < layers.length) {
+            activeLayerIndex = index;
+        }
+    }
+
+    function compositeAndRender() {
+        if (!ctx) return;
+
+        // Clear the main display canvas
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+        // Draw each visible layer in order (bottom to top)
+        for (const layer of layers) {
+            if (layer.visible) {
+                ctx.drawImage(layer.canvas, 0, 0);
+            }
+        }
+
         updatePreview();
     }
 
+    // Layer drag and drop handlers
+    function handleLayerDragStart(index: number) {
+        draggedLayerIndex = index;
+    }
+
+    function handleLayerDragOver(e: DragEvent, index: number) {
+        e.preventDefault();
+        dragOverLayerIndex = index;
+    }
+
+    function handleLayerDragLeave() {
+        dragOverLayerIndex = null;
+    }
+
+    function handleLayerDrop(index: number) {
+        if (draggedLayerIndex !== null && draggedLayerIndex !== index) {
+            moveLayer(draggedLayerIndex, index);
+        }
+        draggedLayerIndex = null;
+        dragOverLayerIndex = null;
+    }
+
+    function handleLayerDragEnd() {
+        draggedLayerIndex = null;
+        dragOverLayerIndex = null;
+    }
+
     function handleKeyDown(e: KeyboardEvent) {
+        // Don't handle shortcuts when editing layer name
+        if (editingLayerId) return;
+
         if ((e.ctrlKey || e.metaKey) && e.key === "z") {
             e.preventDefault();
             if (e.shiftKey) {
@@ -162,6 +366,24 @@
         if ((e.ctrlKey || e.metaKey) && e.key === "y") {
             e.preventDefault();
             redo();
+        }
+        // Layer shortcuts
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "N") {
+            e.preventDefault();
+            addLayer();
+        }
+        // Layer navigation with bracket keys
+        if (e.key === "[" && !e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            if (activeLayerIndex > 0) {
+                setActiveLayer(activeLayerIndex - 1);
+            }
+        }
+        if (e.key === "]" && !e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            if (activeLayerIndex < layers.length - 1) {
+                setActiveLayer(activeLayerIndex + 1);
+            }
         }
         // Selection shortcuts (works for both select and lasso tools)
         if ((e.ctrlKey || e.metaKey) && e.key === "c") {
@@ -275,7 +497,7 @@
     }
 
     function copySelection() {
-        if (!ctx) return;
+        if (!activeCtx) return;
         if (floatingSelection) {
             clipboard = new ImageData(
                 new Uint8ClampedArray(floatingSelection.imageData.data),
@@ -286,11 +508,16 @@
         }
         if (!hasSelection) return;
         const rect = getSelectionRect();
-        clipboard = ctx.getImageData(rect.x, rect.y, rect.width, rect.height);
+        clipboard = activeCtx.getImageData(
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+        );
     }
 
     function cutSelection() {
-        if (!ctx) return;
+        if (!activeCtx) return;
         if (floatingSelection) {
             clipboard = new ImageData(
                 new Uint8ClampedArray(floatingSelection.imageData.data),
@@ -300,20 +527,25 @@
             floatingSelection = null;
             clearSelection();
             drawSelectionOverlay();
-            updatePreview();
+            compositeAndRender();
             return;
         }
         if (!hasSelection) return;
         saveState();
         const rect = getSelectionRect();
-        clipboard = ctx.getImageData(rect.x, rect.y, rect.width, rect.height);
-        ctx.clearRect(rect.x, rect.y, rect.width, rect.height);
+        clipboard = activeCtx.getImageData(
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+        );
+        activeCtx.clearRect(rect.x, rect.y, rect.width, rect.height);
         clearSelection();
-        updatePreview();
+        compositeAndRender();
     }
 
     function pasteSelection() {
-        if (!ctx || !clipboard) return;
+        if (!clipboard) return;
         commitFloatingSelection();
         // Create floating selection at center of viewport or at origin
         floatingSelection = {
@@ -330,7 +562,7 @@
     }
 
     function deleteSelection() {
-        if (!ctx) return;
+        if (!activeCtx) return;
         if (floatingSelection) {
             floatingSelection = null;
             clearSelection();
@@ -340,9 +572,9 @@
         if (!hasSelection) return;
         saveState();
         const rect = getSelectionRect();
-        ctx.clearRect(rect.x, rect.y, rect.width, rect.height);
+        activeCtx.clearRect(rect.x, rect.y, rect.width, rect.height);
         clearSelection();
-        updatePreview();
+        compositeAndRender();
     }
 
     function selectAll() {
@@ -364,15 +596,15 @@
     }
 
     function commitFloatingSelection() {
-        if (!ctx || !floatingSelection) return;
+        if (!activeCtx || !floatingSelection) return;
         saveState();
-        ctx.putImageData(
+        activeCtx.putImageData(
             floatingSelection.imageData,
             floatingSelection.x,
             floatingSelection.y,
         );
         floatingSelection = null;
-        updatePreview();
+        compositeAndRender();
     }
 
     function drawSelectionOverlay() {
@@ -608,14 +840,14 @@
     }
 
     function extractLassoSelection(): void {
-        if (!ctx || !lassoMask || !lassoBounds) return;
+        if (!activeCtx || !lassoMask || !lassoBounds) return;
 
         const { minX, minY, maxX, maxY } = lassoBounds;
         const width = maxX - minX + 1;
         const height = maxY - minY + 1;
 
         // Get the image data for the bounding box
-        const sourceData = ctx.getImageData(minX, minY, width, height);
+        const sourceData = activeCtx.getImageData(minX, minY, width, height);
 
         // Create new image data with only the masked pixels
         const newData = new ImageData(width, height);
@@ -647,7 +879,7 @@
     }
 
     function cutLassoSelection(): void {
-        if (!ctx || !lassoMask || !lassoBounds) return;
+        if (!activeCtx || !lassoMask || !lassoBounds) return;
 
         extractLassoSelection();
         copyLassoSelection();
@@ -656,7 +888,12 @@
 
         // Clear the masked area on canvas
         const { minX, minY, maxX, maxY } = lassoBounds;
-        const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+        const imageData = activeCtx.getImageData(
+            0,
+            0,
+            canvasWidth,
+            canvasHeight,
+        );
 
         for (let y = minY; y <= maxY; y++) {
             for (let x = minX; x <= maxX; x++) {
@@ -670,18 +907,23 @@
             }
         }
 
-        ctx.putImageData(imageData, 0, 0);
+        activeCtx.putImageData(imageData, 0, 0);
         clearLassoSelection();
-        updatePreview();
+        compositeAndRender();
     }
 
     function deleteLassoSelection(): void {
-        if (!ctx || !lassoMask || !lassoBounds) return;
+        if (!activeCtx || !lassoMask || !lassoBounds) return;
 
         saveState();
 
         const { minX, minY, maxX, maxY } = lassoBounds;
-        const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+        const imageData = activeCtx.getImageData(
+            0,
+            0,
+            canvasWidth,
+            canvasHeight,
+        );
 
         for (let y = minY; y <= maxY; y++) {
             for (let x = minX; x <= maxX; x++) {
@@ -695,18 +937,23 @@
             }
         }
 
-        ctx.putImageData(imageData, 0, 0);
+        activeCtx.putImageData(imageData, 0, 0);
         clearLassoSelection();
-        updatePreview();
+        compositeAndRender();
     }
 
     function moveLassoToFloating(): void {
-        if (!ctx || !lassoMask || !lassoBounds || !lassoImageData) return;
+        if (!activeCtx || !lassoMask || !lassoBounds || !lassoImageData) return;
 
         saveState();
 
         // Clear the original area
-        const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+        const imageData = activeCtx.getImageData(
+            0,
+            0,
+            canvasWidth,
+            canvasHeight,
+        );
         const { minX, minY, maxX, maxY } = lassoBounds;
 
         for (let y = minY; y <= maxY; y++) {
@@ -720,7 +967,7 @@
                 }
             }
         }
-        ctx.putImageData(imageData, 0, 0);
+        activeCtx.putImageData(imageData, 0, 0);
 
         // Create floating selection
         floatingSelection = {
@@ -738,7 +985,7 @@
         lassoImageData = null;
         lassoBounds = null;
 
-        updatePreview();
+        compositeAndRender();
     }
 
     function clearLassoSelection(): void {
@@ -863,7 +1110,7 @@
     }
 
     function floodFill(startX: number, startY: number) {
-        if (!ctx) return;
+        if (!activeCtx) return;
         if (
             startX < 0 ||
             startX >= canvasWidth ||
@@ -874,7 +1121,12 @@
 
         saveState();
 
-        const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+        const imageData = activeCtx.getImageData(
+            0,
+            0,
+            canvasWidth,
+            canvasHeight,
+        );
         const targetColor = getPixelColor(imageData, startX, startY);
         const fillColor = hexToRgba(paintColor);
 
@@ -900,12 +1152,12 @@
             stack.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
         }
 
-        ctx.putImageData(imageData, 0, 0);
-        updatePreview();
+        activeCtx.putImageData(imageData, 0, 0);
+        compositeAndRender();
     }
 
     function replaceColor(startX: number, startY: number) {
-        if (!ctx) return;
+        if (!activeCtx) return;
         if (
             startX < 0 ||
             startX >= canvasWidth ||
@@ -916,7 +1168,12 @@
 
         saveState();
 
-        const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+        const imageData = activeCtx.getImageData(
+            0,
+            0,
+            canvasWidth,
+            canvasHeight,
+        );
         const targetColor = getPixelColor(imageData, startX, startY);
         const fillColor = hexToRgba(paintColor);
 
@@ -931,8 +1188,8 @@
             }
         }
 
-        ctx.putImageData(imageData, 0, 0);
-        updatePreview();
+        activeCtx.putImageData(imageData, 0, 0);
+        compositeAndRender();
     }
 
     function drawIsometricDiamond(
@@ -1113,8 +1370,8 @@
     }
 
     function paintPixel(x: number, y: number) {
-        if (!ctx) return;
-        ctx.fillStyle = paintColor;
+        if (!activeCtx) return;
+        activeCtx.fillStyle = paintColor;
 
         const offset = Math.floor(brushSize / 2);
 
@@ -1128,11 +1385,11 @@
                     py >= 0 &&
                     py < canvasHeight
                 ) {
-                    ctx.fillRect(px, py, 1, 1);
+                    activeCtx.fillRect(px, py, 1, 1);
                 }
             }
         }
-        updatePreview();
+        compositeAndRender();
     }
 
     function drawLinePixels(
@@ -1212,15 +1469,20 @@
             if (hasSelection && isInsideSelection(x, y)) {
                 // Convert selection to floating selection
                 const rect = getSelectionRect();
-                if (ctx) {
-                    const selectionData = ctx.getImageData(
+                if (activeCtx) {
+                    const selectionData = activeCtx.getImageData(
                         rect.x,
                         rect.y,
                         rect.width,
                         rect.height,
                     );
                     saveState();
-                    ctx.clearRect(rect.x, rect.y, rect.width, rect.height);
+                    activeCtx.clearRect(
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                    );
                     floatingSelection = {
                         imageData: selectionData,
                         x: rect.x,
@@ -1230,7 +1492,7 @@
                     isMovingSelection = true;
                     moveStartX = x - floatingSelection.x;
                     moveStartY = y - floatingSelection.y;
-                    updatePreview();
+                    compositeAndRender();
                     drawSelectionOverlay();
                 }
                 return;
@@ -1291,9 +1553,9 @@
             replaceColor(x, y);
         } else if (tool === "shape") {
             saveState();
-            if (ctx) {
+            if (activeCtx) {
                 drawShape(
-                    ctx,
+                    activeCtx,
                     selectedShape,
                     x,
                     y,
@@ -1301,7 +1563,7 @@
                     paintColor,
                     true,
                 );
-                updatePreview();
+                compositeAndRender();
             }
         }
     }
@@ -1398,16 +1660,17 @@
             isDrawing = false;
         } else if (tool === "line" && isDrawingLine) {
             isDrawingLine = false;
-            if (ctx) {
+            if (activeCtx) {
                 drawLine(
                     lineStartX,
                     lineStartY,
                     linePreviewEndX,
                     linePreviewEndY,
-                    ctx,
+                    activeCtx,
                     paintColor,
                     true,
                 );
+                compositeAndRender();
             }
             clearGridCanvas();
             if (showGrid) drawGrid();
@@ -1510,10 +1773,10 @@
     }
 
     function clearCanvas() {
-        if (!ctx) return;
+        if (!activeCtx) return;
         saveState();
-        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-        updatePreview();
+        activeCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+        compositeAndRender();
     }
 
     function updatePreview() {
@@ -1525,6 +1788,9 @@
     function exportPNG() {
         if (!canvas) return;
 
+        // Ensure the main canvas has all visible layers composited
+        compositeAndRender();
+
         const link = document.createElement("a");
         link.download = "isometric-asset.png";
         link.href = canvas.toDataURL("image/png");
@@ -1532,7 +1798,11 @@
     }
 
     function applyCanvasSize(width: number, height: number) {
-        const imageData = ctx?.getImageData(0, 0, canvasWidth, canvasHeight);
+        // Save image data from all layers before resizing
+        const layerImageData = layers.map((layer) => ({
+            id: layer.id,
+            imageData: layer.ctx.getImageData(0, 0, canvasWidth, canvasHeight),
+        }));
 
         canvasWidth = width;
         canvasHeight = height;
@@ -1543,11 +1813,21 @@
         redoStack = [];
 
         requestAnimationFrame(() => {
+            // Resize all layer canvases and restore their content
+            for (const layer of layers) {
+                layer.canvas.width = width;
+                layer.canvas.height = height;
+                layer.ctx.imageSmoothingEnabled = false;
+
+                // Restore layer content
+                const savedData = layerImageData.find((d) => d.id === layer.id);
+                if (savedData) {
+                    layer.ctx.putImageData(savedData.imageData, 0, 0);
+                }
+            }
+
             if (ctx) {
                 ctx.imageSmoothingEnabled = false;
-                if (imageData) {
-                    ctx.putImageData(imageData, 0, 0);
-                }
             }
             if (gridCtx) {
                 gridCtx.imageSmoothingEnabled = false;
@@ -1557,7 +1837,7 @@
             if (previewCtx) {
                 previewCtx.imageSmoothingEnabled = false;
             }
-            updatePreview();
+            compositeAndRender();
         });
     }
 
@@ -1585,6 +1865,11 @@
         if (previewCtx) {
             previewCtx.imageSmoothingEnabled = false;
         }
+
+        // Initialize with a single background layer
+        const initialLayer = createLayer("Background");
+        layers = [initialLayer];
+        activeLayerIndex = 0;
 
         window.addEventListener("keydown", handleKeyDown);
 
@@ -1835,6 +2120,104 @@
 
     <!-- Main Content Area -->
     <div class="main-content">
+        <!-- Layers Panel (left sidebar) -->
+        <aside class="layers-sidebar">
+            <div class="layers-header">
+                <span>Layers</span>
+                <button
+                    onclick={addLayer}
+                    class="add-layer-btn"
+                    title="Add new layer">+</button
+                >
+            </div>
+            <div class="layers-list">
+                {#each [...layers].reverse() as layer, reversedIndex}
+                    {@const index = layers.length - 1 - reversedIndex}
+                    <!-- svelte-ignore a11y_click_events_have_key_events -->
+                    <div
+                        class="layer-item"
+                        class:active={index === activeLayerIndex}
+                        class:dragging={index === draggedLayerIndex}
+                        class:drag-over={index === dragOverLayerIndex}
+                        draggable="true"
+                        ondragstart={() => handleLayerDragStart(index)}
+                        ondragover={(e) => handleLayerDragOver(e, index)}
+                        ondragleave={handleLayerDragLeave}
+                        ondrop={() => handleLayerDrop(index)}
+                        ondragend={handleLayerDragEnd}
+                        onclick={() => setActiveLayer(index)}
+                        onkeydown={(e) => {
+                            if (e.key === "Enter" || e.key === " ")
+                                setActiveLayer(index);
+                        }}
+                        role="button"
+                        tabindex="0"
+                    >
+                        <button
+                            class="layer-visibility"
+                            class:hidden={!layer.visible}
+                            onclick={(e) => {
+                                e.stopPropagation();
+                                toggleLayerVisibility(index);
+                            }}
+                            title={layer.visible ? "Hide layer" : "Show layer"}
+                        >
+                            {layer.visible ? "👁" : "○"}
+                        </button>
+                        {#if editingLayerId === layer.id}
+                            <!-- svelte-ignore a11y_autofocus -->
+                            <input
+                                type="text"
+                                class="layer-name-input"
+                                value={layer.name}
+                                onblur={(e) =>
+                                    renameLayer(
+                                        index,
+                                        (e.target as HTMLInputElement).value,
+                                    )}
+                                onkeydown={(e) => {
+                                    if (e.key === "Enter") {
+                                        renameLayer(
+                                            index,
+                                            (e.target as HTMLInputElement)
+                                                .value,
+                                        );
+                                    } else if (e.key === "Escape") {
+                                        editingLayerId = null;
+                                    }
+                                }}
+                                onclick={(e) => e.stopPropagation()}
+                                autofocus
+                            />
+                        {:else}
+                            <!-- svelte-ignore a11y_no_static_element_interactions -->
+                            <span
+                                class="layer-name"
+                                ondblclick={(e) => {
+                                    e.stopPropagation();
+                                    editingLayerId = layer.id;
+                                }}
+                            >
+                                {layer.name}
+                            </span>
+                        {/if}
+                        {#if layers.length > 1}
+                            <button
+                                class="layer-delete"
+                                onclick={(e) => {
+                                    e.stopPropagation();
+                                    removeLayer(index);
+                                }}
+                                title="Delete layer"
+                            >
+                                ×
+                            </button>
+                        {/if}
+                    </div>
+                {/each}
+            </div>
+        </aside>
+
         <!-- Canvas Area (center) -->
         <main
             class="canvas-area"
@@ -1977,6 +2360,155 @@
         width: 100vw;
         overflow: hidden;
         background: #1a1a1a;
+    }
+
+    /* Layers Sidebar */
+    .layers-sidebar {
+        width: 180px;
+        flex-shrink: 0;
+        background: #252525;
+        border-right: 1px solid #3a3a3a;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .layers-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 12px;
+        border-bottom: 1px solid #3a3a3a;
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #888;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .add-layer-btn {
+        width: 22px;
+        height: 22px;
+        padding: 0;
+        font-size: 1rem;
+        line-height: 1;
+        background: #3a3a3a;
+        border: 1px solid #4a4a4a;
+        color: #ccc;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+
+    .add-layer-btn:hover {
+        background: #4a4a4a;
+        border-color: #5a5a5a;
+    }
+
+    .layers-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 4px 0;
+    }
+
+    .layer-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        margin: 2px 4px;
+        border-radius: 4px;
+        cursor: pointer;
+        background: transparent;
+        border: 1px solid transparent;
+        transition: all 0.15s;
+    }
+
+    .layer-item:hover {
+        background: #333;
+    }
+
+    .layer-item.active {
+        background: #3a3a3a;
+        border-color: #646cff;
+    }
+
+    .layer-item.dragging {
+        opacity: 0.5;
+    }
+
+    .layer-item.drag-over {
+        border-top: 2px solid #646cff;
+    }
+
+    .layer-visibility {
+        width: 20px;
+        height: 20px;
+        padding: 0;
+        font-size: 0.75rem;
+        background: none;
+        border: none;
+        color: #888;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    .layer-visibility:hover {
+        color: #ccc;
+    }
+
+    .layer-visibility.hidden {
+        color: #555;
+    }
+
+    .layer-name {
+        flex: 1;
+        font-size: 0.8rem;
+        color: #ccc;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .layer-name-input {
+        flex: 1;
+        font-size: 0.8rem;
+        color: #ccc;
+        background: #2a2a2a;
+        border: 1px solid #4a4a4a;
+        border-radius: 3px;
+        padding: 2px 4px;
+        outline: none;
+    }
+
+    .layer-name-input:focus {
+        border-color: #646cff;
+    }
+
+    .layer-delete {
+        width: 18px;
+        height: 18px;
+        padding: 0;
+        font-size: 1rem;
+        line-height: 1;
+        background: none;
+        border: none;
+        color: #666;
+        cursor: pointer;
+        opacity: 0;
+        transition: all 0.15s;
+        flex-shrink: 0;
+    }
+
+    .layer-item:hover .layer-delete {
+        opacity: 1;
+    }
+
+    .layer-delete:hover {
+        color: #ff6b6b;
     }
 
     /* Toolbar Area */
@@ -2308,6 +2840,66 @@
     @media (prefers-color-scheme: light) {
         .editor-layout {
             background: #e5e5e5;
+        }
+
+        .layers-sidebar {
+            background: #f0f0f0;
+            border-right-color: #ddd;
+        }
+
+        .layers-header {
+            border-bottom-color: #ddd;
+            color: #666;
+        }
+
+        .add-layer-btn {
+            background: #e0e0e0;
+            border-color: #ccc;
+            color: #333;
+        }
+
+        .add-layer-btn:hover {
+            background: #d0d0d0;
+            border-color: #bbb;
+        }
+
+        .layer-item:hover {
+            background: #e0e0e0;
+        }
+
+        .layer-item.active {
+            background: #d8d8ff;
+            border-color: #646cff;
+        }
+
+        .layer-visibility {
+            color: #666;
+        }
+
+        .layer-visibility:hover {
+            color: #333;
+        }
+
+        .layer-visibility.hidden {
+            color: #aaa;
+        }
+
+        .layer-name {
+            color: #333;
+        }
+
+        .layer-name-input {
+            background: #fff;
+            border-color: #ccc;
+            color: #333;
+        }
+
+        .layer-delete {
+            color: #999;
+        }
+
+        .layer-delete:hover {
+            color: #ff4444;
         }
 
         .toolbar-area {
