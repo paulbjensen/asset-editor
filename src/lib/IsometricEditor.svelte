@@ -73,14 +73,33 @@
         { name: "16x16", width: 16, height: 16 },
     ];
 
-    // Isometric shapes for drag and drop
-    const ISOMETRIC_SHAPES = [
-        { name: "Diamond", id: "diamond" },
-        { name: "Ellipse", id: "ellipse" },
-        { name: "Cube Top", id: "cube-top" },
-        { name: "Cube Left", id: "cube-left" },
-        { name: "Cube Right", id: "cube-right" },
-    ];
+    // Shape groups
+    const SHAPE_GROUPS = {
+        basic: {
+            name: "Basic",
+            shapes: [
+                { name: "Square", id: "square" },
+                { name: "Rectangle", id: "rectangle" },
+                { name: "Circle", id: "circle" },
+                { name: "Triangle", id: "triangle" },
+                { name: "Star", id: "star" },
+                { name: "Hexagon", id: "hexagon" },
+            ],
+        },
+        isometric: {
+            name: "Isometric",
+            shapes: [
+                { name: "Diamond", id: "diamond" },
+                { name: "Ellipse", id: "ellipse" },
+                { name: "Cube Top", id: "cube-top" },
+                { name: "Cube Left", id: "cube-left" },
+                { name: "Cube Right", id: "cube-right" },
+            ],
+        },
+    };
+
+    // Legacy constant for backwards compatibility
+    const ISOMETRIC_SHAPES = SHAPE_GROUPS.isometric.shapes;
 
     // State
     let canvas: HTMLCanvasElement;
@@ -137,10 +156,17 @@
     } | null = $state(null);
 
     // Shape tool state
-    let selectedShape: string = $state("diamond");
+    let selectedShapeGroup: "basic" | "isometric" = $state("basic");
+    let selectedShape: string = $state("square");
     let shapeSize: number = $state(32);
+    let shapeWidth: number = $state(32);
+    let shapeHeight: number = $state(32);
     let shapePreviewX: number = $state(0);
     let shapePreviewY: number = $state(0);
+
+    // Shapes that need separate width/height controls
+    const RECT_SHAPES = ["rectangle"];
+    let needsSeparateDimensions = $derived(RECT_SHAPES.includes(selectedShape));
 
     // Pan state
     let isPanning: boolean = $state(false);
@@ -1636,6 +1662,182 @@
         compositeAndRender();
     }
 
+    // Basic shape drawing functions
+    function drawSquare(
+        targetCtx: CanvasRenderingContext2D,
+        cx: number,
+        cy: number,
+        size: number,
+        color: string,
+        filled: boolean = true,
+    ) {
+        const halfSize = size / 2;
+        const x = Math.round(cx - halfSize);
+        const y = Math.round(cy - halfSize);
+
+        targetCtx.fillStyle = color;
+        targetCtx.strokeStyle = color;
+
+        if (filled) {
+            targetCtx.fillRect(x, y, size, size);
+        } else {
+            targetCtx.lineWidth = 1;
+            targetCtx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
+        }
+    }
+
+    function drawRectangle(
+        targetCtx: CanvasRenderingContext2D,
+        cx: number,
+        cy: number,
+        width: number,
+        height: number,
+        color: string,
+        filled: boolean = true,
+    ) {
+        const x = Math.round(cx - width / 2);
+        const y = Math.round(cy - height / 2);
+
+        targetCtx.fillStyle = color;
+        targetCtx.strokeStyle = color;
+
+        if (filled) {
+            targetCtx.fillRect(x, y, width, height);
+        } else {
+            targetCtx.lineWidth = 1;
+            targetCtx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
+        }
+    }
+
+    function drawCircle(
+        targetCtx: CanvasRenderingContext2D,
+        cx: number,
+        cy: number,
+        size: number,
+        color: string,
+        filled: boolean = true,
+    ) {
+        const radius = size / 2;
+
+        targetCtx.fillStyle = color;
+        targetCtx.strokeStyle = color;
+        targetCtx.beginPath();
+        targetCtx.arc(cx, cy, radius, 0, Math.PI * 2);
+
+        if (filled) {
+            targetCtx.fill();
+        } else {
+            targetCtx.lineWidth = 1;
+            targetCtx.stroke();
+        }
+    }
+
+    function drawTriangle(
+        targetCtx: CanvasRenderingContext2D,
+        cx: number,
+        cy: number,
+        size: number,
+        color: string,
+        filled: boolean = true,
+    ) {
+        const halfSize = size / 2;
+        const height = size * (Math.sqrt(3) / 2);
+        const topY = cy - height / 2;
+        const bottomY = cy + height / 2;
+
+        targetCtx.fillStyle = color;
+        targetCtx.strokeStyle = color;
+        targetCtx.beginPath();
+        targetCtx.moveTo(cx, topY);
+        targetCtx.lineTo(cx + halfSize, bottomY);
+        targetCtx.lineTo(cx - halfSize, bottomY);
+        targetCtx.closePath();
+
+        if (filled) {
+            targetCtx.fill();
+        } else {
+            targetCtx.lineWidth = 1;
+            targetCtx.stroke();
+        }
+    }
+
+    function drawStar(
+        targetCtx: CanvasRenderingContext2D,
+        cx: number,
+        cy: number,
+        size: number,
+        color: string,
+        filled: boolean = true,
+        points: number = 5,
+    ) {
+        const outerRadius = size / 2;
+        const innerRadius = outerRadius * 0.4;
+        const step = Math.PI / points;
+
+        targetCtx.fillStyle = color;
+        targetCtx.strokeStyle = color;
+        targetCtx.beginPath();
+
+        for (let i = 0; i < points * 2; i++) {
+            const radius = i % 2 === 0 ? outerRadius : innerRadius;
+            const angle = i * step - Math.PI / 2;
+            const x = cx + Math.cos(angle) * radius;
+            const y = cy + Math.sin(angle) * radius;
+
+            if (i === 0) {
+                targetCtx.moveTo(x, y);
+            } else {
+                targetCtx.lineTo(x, y);
+            }
+        }
+
+        targetCtx.closePath();
+
+        if (filled) {
+            targetCtx.fill();
+        } else {
+            targetCtx.lineWidth = 1;
+            targetCtx.stroke();
+        }
+    }
+
+    function drawHexagon(
+        targetCtx: CanvasRenderingContext2D,
+        cx: number,
+        cy: number,
+        size: number,
+        color: string,
+        filled: boolean = true,
+    ) {
+        const radius = size / 2;
+
+        targetCtx.fillStyle = color;
+        targetCtx.strokeStyle = color;
+        targetCtx.beginPath();
+
+        for (let i = 0; i < 6; i++) {
+            const angle = (i * Math.PI) / 3 - Math.PI / 6;
+            const x = cx + Math.cos(angle) * radius;
+            const y = cy + Math.sin(angle) * radius;
+
+            if (i === 0) {
+                targetCtx.moveTo(x, y);
+            } else {
+                targetCtx.lineTo(x, y);
+            }
+        }
+
+        targetCtx.closePath();
+
+        if (filled) {
+            targetCtx.fill();
+        } else {
+            targetCtx.lineWidth = 1;
+            targetCtx.stroke();
+        }
+    }
+
+    // Isometric shape drawing functions
     function drawIsometricDiamond(
         targetCtx: CanvasRenderingContext2D,
         cx: number,
@@ -1767,6 +1969,57 @@
         targetCtx.fill();
     }
 
+    // Helper function to draw a shape by ID (used by drawShape for both temp canvas and direct drawing)
+    function drawShapeById(
+        targetCtx: CanvasRenderingContext2D,
+        shapeId: string,
+        cx: number,
+        cy: number,
+        size: number,
+        width: number,
+        height: number,
+        color: string,
+        filled: boolean,
+    ) {
+        switch (shapeId) {
+            // Basic shapes
+            case "square":
+                drawSquare(targetCtx, cx, cy, size, color, filled);
+                break;
+            case "rectangle":
+                drawRectangle(targetCtx, cx, cy, width, height, color, filled);
+                break;
+            case "circle":
+                drawCircle(targetCtx, cx, cy, size, color, filled);
+                break;
+            case "triangle":
+                drawTriangle(targetCtx, cx, cy, size, color, filled);
+                break;
+            case "star":
+                drawStar(targetCtx, cx, cy, size, color, filled);
+                break;
+            case "hexagon":
+                drawHexagon(targetCtx, cx, cy, size, color, filled);
+                break;
+            // Isometric shapes
+            case "diamond":
+                drawIsometricDiamond(targetCtx, cx, cy, size, color, filled);
+                break;
+            case "ellipse":
+                drawIsometricEllipse(targetCtx, cx, cy, size, color, filled);
+                break;
+            case "cube-top":
+                drawCubeTop(targetCtx, cx, cy, size, color);
+                break;
+            case "cube-left":
+                drawCubeLeft(targetCtx, cx, cy, size, color);
+                break;
+            case "cube-right":
+                drawCubeRight(targetCtx, cx, cy, size, color);
+                break;
+        }
+    }
+
     function drawShape(
         targetCtx: CanvasRenderingContext2D,
         shapeId: string,
@@ -1776,6 +2029,8 @@
         color: string,
         filled: boolean = true,
         opacity: number = 100,
+        width: number = size,
+        height: number = size,
     ) {
         // For shapes with transparency, we draw to a temp canvas then blend
         if (opacity < 100 && targetCtx === activeCtx) {
@@ -1786,23 +2041,17 @@
             tempCtx.imageSmoothingEnabled = false;
 
             // Draw shape at full opacity on temp canvas
-            switch (shapeId) {
-                case "diamond":
-                    drawIsometricDiamond(tempCtx, cx, cy, size, color, filled);
-                    break;
-                case "ellipse":
-                    drawIsometricEllipse(tempCtx, cx, cy, size, color, filled);
-                    break;
-                case "cube-top":
-                    drawCubeTop(tempCtx, cx, cy, size, color);
-                    break;
-                case "cube-left":
-                    drawCubeLeft(tempCtx, cx, cy, size, color);
-                    break;
-                case "cube-right":
-                    drawCubeRight(tempCtx, cx, cy, size, color);
-                    break;
-            }
+            drawShapeById(
+                tempCtx,
+                shapeId,
+                cx,
+                cy,
+                size,
+                width,
+                height,
+                color,
+                filled,
+            );
 
             // Blend the shape onto the target canvas with opacity
             const shapeData = tempCtx.getImageData(
@@ -1854,37 +2103,17 @@
 
             targetCtx.putImageData(targetData, 0, 0);
         } else {
-            switch (shapeId) {
-                case "diamond":
-                    drawIsometricDiamond(
-                        targetCtx,
-                        cx,
-                        cy,
-                        size,
-                        color,
-                        filled,
-                    );
-                    break;
-                case "ellipse":
-                    drawIsometricEllipse(
-                        targetCtx,
-                        cx,
-                        cy,
-                        size,
-                        color,
-                        filled,
-                    );
-                    break;
-                case "cube-top":
-                    drawCubeTop(targetCtx, cx, cy, size, color);
-                    break;
-                case "cube-left":
-                    drawCubeLeft(targetCtx, cx, cy, size, color);
-                    break;
-                case "cube-right":
-                    drawCubeRight(targetCtx, cx, cy, size, color);
-                    break;
-            }
+            drawShapeById(
+                targetCtx,
+                shapeId,
+                cx,
+                cy,
+                size,
+                width,
+                height,
+                color,
+                filled,
+            );
         }
     }
 
@@ -1902,6 +2131,9 @@
             shapeSize,
             paintColor,
             true,
+            100,
+            shapeWidth,
+            shapeHeight,
         );
         gridCtx.globalAlpha = 1;
     }
@@ -2204,6 +2436,8 @@
                     paintColor,
                     true,
                     paintOpacity,
+                    shapeWidth,
+                    shapeHeight,
                 );
                 compositeAndRender();
             }
@@ -2732,21 +2966,58 @@
         <div class="toolbar secondary">
             {#if tool === "shape"}
                 <div class="tool-group">
+                    <span class="group-label">Group:</span>
+                    <select
+                        bind:value={selectedShapeGroup}
+                        onchange={() => {
+                            // Reset to first shape in new group
+                            selectedShape =
+                                SHAPE_GROUPS[selectedShapeGroup].shapes[0].id;
+                        }}
+                    >
+                        <option value="basic">Basic</option>
+                        <option value="isometric">Isometric</option>
+                    </select>
+                </div>
+                <div class="tool-group">
                     <span class="group-label">Shape:</span>
                     <select bind:value={selectedShape}>
-                        {#each ISOMETRIC_SHAPES as shape}
+                        {#each SHAPE_GROUPS[selectedShapeGroup].shapes as shape}
                             <option value={shape.id}>{shape.name}</option>
                         {/each}
                     </select>
-                    <label for="shape-size">Size:</label>
-                    <input
-                        id="shape-size"
-                        type="number"
-                        min="4"
-                        max="256"
-                        bind:value={shapeSize}
-                        class="number-input"
-                    />
+                </div>
+                <div class="tool-group">
+                    {#if needsSeparateDimensions}
+                        <label for="shape-width">W:</label>
+                        <input
+                            id="shape-width"
+                            type="number"
+                            min="4"
+                            max="256"
+                            bind:value={shapeWidth}
+                            class="number-input"
+                        />
+                        <label for="shape-height">H:</label>
+                        <input
+                            id="shape-height"
+                            type="number"
+                            min="4"
+                            max="256"
+                            bind:value={shapeHeight}
+                            class="number-input"
+                        />
+                    {:else}
+                        <label for="shape-size">Size:</label>
+                        <input
+                            id="shape-size"
+                            type="number"
+                            min="4"
+                            max="256"
+                            bind:value={shapeSize}
+                            class="number-input"
+                        />
+                    {/if}
                     <span class="unit">px</span>
                 </div>
                 <div class="toolbar-divider"></div>
