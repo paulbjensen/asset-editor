@@ -91,6 +91,7 @@
 
     // Drawing state
     let paintColor: string = $state("#000000");
+    let paintOpacity: number = $state(100); // Opacity percentage (0-100)
     let isDrawing: boolean = $state(false);
     let zoom: number = $state(1);
     let tool:
@@ -1347,21 +1348,34 @@
         };
     }
 
-    function hexToRgba(hex: string): {
+    function hexToRgba(
+        hex: string,
+        opacity: number = 100,
+    ): {
         r: number;
         g: number;
         b: number;
         a: number;
     } {
         const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        const alpha = Math.round((opacity / 100) * 255);
         return result
             ? {
                   r: parseInt(result[1], 16),
                   g: parseInt(result[2], 16),
                   b: parseInt(result[3], 16),
-                  a: 255,
+                  a: alpha,
               }
-            : { r: 0, g: 0, b: 0, a: 255 };
+            : { r: 0, g: 0, b: 0, a: alpha };
+    }
+
+    function rgbaToString(color: {
+        r: number;
+        g: number;
+        b: number;
+        a: number;
+    }): string {
+        return `rgba(${color.r}, ${color.g}, ${color.b}, ${color.a / 255})`;
     }
 
     function colorsMatch(
@@ -1423,8 +1437,9 @@
             canvasHeight,
         );
         const targetColor = getPixelColor(imageData, startX, startY);
-        const fillColor = hexToRgba(paintColor);
+        const fillColor = hexToRgba(paintColor, paintOpacity);
 
+        // Only skip if colors match exactly (including alpha)
         if (colorsMatch(targetColor, fillColor)) return;
 
         const stack: [number, number][] = [[startX, startY]];
@@ -1470,8 +1485,9 @@
             canvasHeight,
         );
         const targetColor = getPixelColor(imageData, startX, startY);
-        const fillColor = hexToRgba(paintColor);
+        const fillColor = hexToRgba(paintColor, paintOpacity);
 
+        // Only skip if colors match exactly (including alpha)
         if (colorsMatch(targetColor, fillColor)) return;
 
         for (let y = 0; y < canvasHeight; y++) {
@@ -1626,23 +1642,116 @@
         size: number,
         color: string,
         filled: boolean = true,
+        opacity: number = 100,
     ) {
-        switch (shapeId) {
-            case "diamond":
-                drawIsometricDiamond(targetCtx, cx, cy, size, color, filled);
-                break;
-            case "ellipse":
-                drawIsometricEllipse(targetCtx, cx, cy, size, color, filled);
-                break;
-            case "cube-top":
-                drawCubeTop(targetCtx, cx, cy, size, color);
-                break;
-            case "cube-left":
-                drawCubeLeft(targetCtx, cx, cy, size, color);
-                break;
-            case "cube-right":
-                drawCubeRight(targetCtx, cx, cy, size, color);
-                break;
+        // For shapes with transparency, we draw to a temp canvas then blend
+        if (opacity < 100 && targetCtx === activeCtx) {
+            const tempCanvas = document.createElement("canvas");
+            tempCanvas.width = canvasWidth;
+            tempCanvas.height = canvasHeight;
+            const tempCtx = tempCanvas.getContext("2d")!;
+            tempCtx.imageSmoothingEnabled = false;
+
+            // Draw shape at full opacity on temp canvas
+            switch (shapeId) {
+                case "diamond":
+                    drawIsometricDiamond(tempCtx, cx, cy, size, color, filled);
+                    break;
+                case "ellipse":
+                    drawIsometricEllipse(tempCtx, cx, cy, size, color, filled);
+                    break;
+                case "cube-top":
+                    drawCubeTop(tempCtx, cx, cy, size, color);
+                    break;
+                case "cube-left":
+                    drawCubeLeft(tempCtx, cx, cy, size, color);
+                    break;
+                case "cube-right":
+                    drawCubeRight(tempCtx, cx, cy, size, color);
+                    break;
+            }
+
+            // Blend the shape onto the target canvas with opacity
+            const shapeData = tempCtx.getImageData(
+                0,
+                0,
+                canvasWidth,
+                canvasHeight,
+            );
+            const targetData = targetCtx.getImageData(
+                0,
+                0,
+                canvasWidth,
+                canvasHeight,
+            );
+            const alpha = opacity / 100;
+
+            for (let i = 0; i < shapeData.data.length; i += 4) {
+                if (shapeData.data[i + 3] > 0) {
+                    const srcAlpha = (shapeData.data[i + 3] / 255) * alpha;
+                    const dstAlpha = targetData.data[i + 3] / 255;
+                    const outAlpha = srcAlpha + dstAlpha * (1 - srcAlpha);
+
+                    if (outAlpha > 0) {
+                        targetData.data[i] = Math.round(
+                            (shapeData.data[i] * srcAlpha +
+                                targetData.data[i] *
+                                    dstAlpha *
+                                    (1 - srcAlpha)) /
+                                outAlpha,
+                        );
+                        targetData.data[i + 1] = Math.round(
+                            (shapeData.data[i + 1] * srcAlpha +
+                                targetData.data[i + 1] *
+                                    dstAlpha *
+                                    (1 - srcAlpha)) /
+                                outAlpha,
+                        );
+                        targetData.data[i + 2] = Math.round(
+                            (shapeData.data[i + 2] * srcAlpha +
+                                targetData.data[i + 2] *
+                                    dstAlpha *
+                                    (1 - srcAlpha)) /
+                                outAlpha,
+                        );
+                        targetData.data[i + 3] = Math.round(outAlpha * 255);
+                    }
+                }
+            }
+
+            targetCtx.putImageData(targetData, 0, 0);
+        } else {
+            switch (shapeId) {
+                case "diamond":
+                    drawIsometricDiamond(
+                        targetCtx,
+                        cx,
+                        cy,
+                        size,
+                        color,
+                        filled,
+                    );
+                    break;
+                case "ellipse":
+                    drawIsometricEllipse(
+                        targetCtx,
+                        cx,
+                        cy,
+                        size,
+                        color,
+                        filled,
+                    );
+                    break;
+                case "cube-top":
+                    drawCubeTop(targetCtx, cx, cy, size, color);
+                    break;
+                case "cube-left":
+                    drawCubeLeft(targetCtx, cx, cy, size, color);
+                    break;
+                case "cube-right":
+                    drawCubeRight(targetCtx, cx, cy, size, color);
+                    break;
+            }
         }
     }
 
@@ -1666,25 +1775,88 @@
 
     function paintPixel(x: number, y: number) {
         if (!activeCtx) return;
-        activeCtx.fillStyle = paintColor;
 
+        const color = hexToRgba(paintColor, paintOpacity);
         const offset = Math.floor(brushSize / 2);
 
-        for (let dx = 0; dx < brushSize; dx++) {
-            for (let dy = 0; dy < brushSize; dy++) {
-                const px = x - offset + dx;
-                const py = y - offset + dy;
-                if (
-                    px >= 0 &&
-                    px < canvasWidth &&
-                    py >= 0 &&
-                    py < canvasHeight
-                ) {
-                    activeCtx.fillRect(px, py, 1, 1);
+        // For full opacity, use simple fillRect
+        if (paintOpacity === 100) {
+            activeCtx.fillStyle = paintColor;
+            for (let dx = 0; dx < brushSize; dx++) {
+                for (let dy = 0; dy < brushSize; dy++) {
+                    const px = x - offset + dx;
+                    const py = y - offset + dy;
+                    if (
+                        px >= 0 &&
+                        px < canvasWidth &&
+                        py >= 0 &&
+                        py < canvasHeight
+                    ) {
+                        activeCtx.fillRect(px, py, 1, 1);
+                    }
                 }
             }
+        } else {
+            // For partial opacity, use ImageData for proper alpha handling
+            const imageData = activeCtx.getImageData(
+                0,
+                0,
+                canvasWidth,
+                canvasHeight,
+            );
+
+            for (let dx = 0; dx < brushSize; dx++) {
+                for (let dy = 0; dy < brushSize; dy++) {
+                    const px = x - offset + dx;
+                    const py = y - offset + dy;
+                    if (
+                        px >= 0 &&
+                        px < canvasWidth &&
+                        py >= 0 &&
+                        py < canvasHeight
+                    ) {
+                        blendPixel(imageData, px, py, color);
+                    }
+                }
+            }
+
+            activeCtx.putImageData(imageData, 0, 0);
         }
         compositeAndRender();
+    }
+
+    // Alpha blending function for semi-transparent painting
+    function blendPixel(
+        imageData: ImageData,
+        x: number,
+        y: number,
+        color: { r: number; g: number; b: number; a: number },
+    ) {
+        const index = (y * imageData.width + x) * 4;
+        const srcAlpha = color.a / 255;
+        const dstAlpha = imageData.data[index + 3] / 255;
+
+        // Standard alpha compositing (Porter-Duff "over" operation)
+        const outAlpha = srcAlpha + dstAlpha * (1 - srcAlpha);
+
+        if (outAlpha > 0) {
+            imageData.data[index] = Math.round(
+                (color.r * srcAlpha +
+                    imageData.data[index] * dstAlpha * (1 - srcAlpha)) /
+                    outAlpha,
+            );
+            imageData.data[index + 1] = Math.round(
+                (color.g * srcAlpha +
+                    imageData.data[index + 1] * dstAlpha * (1 - srcAlpha)) /
+                    outAlpha,
+            );
+            imageData.data[index + 2] = Math.round(
+                (color.b * srcAlpha +
+                    imageData.data[index + 2] * dstAlpha * (1 - srcAlpha)) /
+                    outAlpha,
+            );
+            imageData.data[index + 3] = Math.round(outAlpha * 255);
+        }
     }
 
     function drawLinePixels(
@@ -1694,6 +1866,7 @@
         y2: number,
         targetCtx: CanvasRenderingContext2D,
         color: string,
+        opacity: number = 100,
     ) {
         const dx = Math.abs(x2 - x1);
         const dy = Math.abs(y2 - y1);
@@ -1704,24 +1877,63 @@
         let x = x1;
         let y = y1;
 
-        targetCtx.fillStyle = color;
+        // For full opacity or preview (gridCtx), use simple fillRect
+        if (opacity === 100 || targetCtx !== activeCtx) {
+            targetCtx.fillStyle = color;
 
-        while (true) {
-            if (x >= 0 && x < canvasWidth && y >= 0 && y < canvasHeight) {
-                targetCtx.fillRect(x, y, 1, 1);
+            while (true) {
+                if (x >= 0 && x < canvasWidth && y >= 0 && y < canvasHeight) {
+                    targetCtx.fillRect(x, y, 1, 1);
+                }
+
+                if (x === x2 && y === y2) break;
+
+                const e2 = 2 * err;
+                if (e2 > -dy) {
+                    err -= dy;
+                    x += sx;
+                }
+                if (e2 < dx) {
+                    err += dx;
+                    y += sy;
+                }
+            }
+        } else {
+            // For partial opacity, collect points first then blend
+            const points: { x: number; y: number }[] = [];
+
+            while (true) {
+                if (x >= 0 && x < canvasWidth && y >= 0 && y < canvasHeight) {
+                    points.push({ x, y });
+                }
+
+                if (x === x2 && y === y2) break;
+
+                const e2 = 2 * err;
+                if (e2 > -dy) {
+                    err -= dy;
+                    x += sx;
+                }
+                if (e2 < dx) {
+                    err += dx;
+                    y += sy;
+                }
             }
 
-            if (x === x2 && y === y2) break;
+            // Blend all points with opacity
+            const imageData = targetCtx.getImageData(
+                0,
+                0,
+                canvasWidth,
+                canvasHeight,
+            );
+            const rgba = hexToRgba(color, opacity);
 
-            const e2 = 2 * err;
-            if (e2 > -dy) {
-                err -= dy;
-                x += sx;
+            for (const point of points) {
+                blendPixel(imageData, point.x, point.y, rgba);
             }
-            if (e2 < dx) {
-                err += dx;
-                y += sy;
-            }
+
+            targetCtx.putImageData(imageData, 0, 0);
         }
     }
 
@@ -1733,8 +1945,9 @@
         targetCtx: CanvasRenderingContext2D,
         color: string,
         updatePreviewAfter: boolean = false,
+        opacity: number = 100,
     ) {
-        drawLinePixels(x1, y1, x2, y2, targetCtx, color);
+        drawLinePixels(x1, y1, x2, y2, targetCtx, color, opacity);
         if (updatePreviewAfter) {
             updatePreview();
         }
@@ -1857,6 +2070,7 @@
                     shapeSize,
                     paintColor,
                     true,
+                    paintOpacity,
                 );
                 compositeAndRender();
             }
@@ -1964,6 +2178,7 @@
                     activeCtx,
                     paintColor,
                     true,
+                    paintOpacity,
                 );
                 compositeAndRender();
             }
@@ -2254,6 +2469,19 @@
                 <label for="color-picker">Color:</label>
                 <input id="color-picker" type="color" bind:value={paintColor} />
                 <span class="color-hex">{paintColor}</span>
+            </div>
+
+            <div class="tool-group">
+                <label for="opacity-slider">Opacity:</label>
+                <input
+                    id="opacity-slider"
+                    type="range"
+                    min="0"
+                    max="100"
+                    bind:value={paintOpacity}
+                    class="opacity-slider"
+                />
+                <span class="opacity-value">{paintOpacity}%</span>
             </div>
 
             <div class="tool-group">
@@ -2610,6 +2838,10 @@
                     <div class="info-row">
                         <span class="info-label">Brush:</span>
                         <span class="info-value">{brushSize}px</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Opacity:</span>
+                        <span class="info-value">{paintOpacity}%</span>
                     </div>
                     <div class="info-row">
                         <span class="info-label">Zoom:</span>
@@ -3389,6 +3621,21 @@
         color: #888;
     }
 
+    .opacity-slider {
+        width: 80px;
+        height: 6px;
+        cursor: pointer;
+        accent-color: #646cff;
+    }
+
+    .opacity-value {
+        font-family: monospace;
+        font-size: 0.75rem;
+        color: #888;
+        min-width: 36px;
+        text-align: right;
+    }
+
     .hint {
         font-size: 0.7rem;
         color: #666;
@@ -3832,8 +4079,13 @@
         }
 
         .color-hex,
-        .zoom-value {
+        .zoom-value,
+        .opacity-value {
             color: #666;
+        }
+
+        .opacity-slider {
+            accent-color: #646cff;
         }
 
         .number-input,
