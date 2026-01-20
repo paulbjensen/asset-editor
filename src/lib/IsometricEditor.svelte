@@ -54,6 +54,7 @@
     let saveAsMode: boolean = $state(false);
     let saveNameInput: string = $state("");
     let deleteConfirmId: string | null = $state(null);
+    let showFileMenu: boolean = $state(false);
 
     // Custom dimension inputs
     let customWidth: string = $state("512");
@@ -712,6 +713,19 @@
             hour: "2-digit",
             minute: "2-digit",
         });
+    }
+
+    function toggleFileMenu(): void {
+        showFileMenu = !showFileMenu;
+    }
+
+    function closeFileMenu(): void {
+        showFileMenu = false;
+    }
+
+    function handleFileMenuAction(action: () => void): void {
+        action();
+        closeFileMenu();
     }
 
     function newImage(): void {
@@ -2506,6 +2520,58 @@
     <!-- Top Toolbar Area -->
     <header class="toolbar-area">
         <div class="toolbar">
+            <div class="tool-group file-menu-container">
+                <button
+                    class="file-menu-button"
+                    class:active={showFileMenu}
+                    onclick={toggleFileMenu}
+                >
+                    File
+                </button>
+                {#if showFileMenu}
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
+                    <div
+                        class="file-menu-backdrop"
+                        onclick={closeFileMenu}
+                        onkeydown={(e) => e.key === "Escape" && closeFileMenu()}
+                    ></div>
+                    <div class="file-menu-dropdown">
+                        <button onclick={() => handleFileMenuAction(newImage)}>
+                            <span class="menu-item-label">New</span>
+                        </button>
+                        <button
+                            onclick={() => handleFileMenuAction(openLoadModal)}
+                        >
+                            <span class="menu-item-label">Open...</span>
+                            <span class="menu-item-shortcut">Ctrl+O</span>
+                        </button>
+                        <div class="menu-divider"></div>
+                        <button
+                            onclick={() =>
+                                handleFileMenuAction(() =>
+                                    openSaveModal(false),
+                                )}
+                        >
+                            <span class="menu-item-label">Save</span>
+                            <span class="menu-item-shortcut">Ctrl+S</span>
+                        </button>
+                        <button
+                            onclick={() =>
+                                handleFileMenuAction(() => openSaveModal(true))}
+                        >
+                            <span class="menu-item-label">Save As...</span>
+                            <span class="menu-item-shortcut">Ctrl+Shift+S</span>
+                        </button>
+                        <div class="menu-divider"></div>
+                        <button onclick={() => handleFileMenuAction(exportPNG)}>
+                            <span class="menu-item-label">Export PNG</span>
+                        </button>
+                    </div>
+                {/if}
+            </div>
+
+            <div class="toolbar-divider"></div>
+
             <div class="tool-group">
                 <span class="group-label">Tool:</span>
                 <button
@@ -2618,27 +2684,7 @@
             <div class="toolbar-divider"></div>
 
             <div class="tool-group">
-                <button onclick={newImage} title="New image">New</button>
-                <button
-                    onclick={() => openSaveModal(false)}
-                    title="Save (Ctrl+S)">Save</button
-                >
-                <button
-                    onclick={() => openSaveModal(true)}
-                    title="Save As (Ctrl+Shift+S)">Save As</button
-                >
-                <button onclick={openLoadModal} title="Load (Ctrl+O)"
-                    >Load</button
-                >
-            </div>
-
-            <div class="toolbar-divider"></div>
-
-            <div class="tool-group">
                 <button onclick={clearCanvas}>Clear</button>
-                <button onclick={exportPNG} class="export-btn"
-                    >Export PNG</button
-                >
             </div>
         </div>
 
@@ -3702,6 +3748,71 @@
         color: white;
     }
 
+    /* File Menu Dropdown */
+    .file-menu-container {
+        position: relative;
+    }
+
+    .file-menu-button {
+        min-width: 50px;
+    }
+
+    .file-menu-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 99;
+    }
+
+    .file-menu-dropdown {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        margin-top: 4px;
+        background: #2a2a2a;
+        border: 1px solid #4a4a4a;
+        border-radius: 6px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+        min-width: 180px;
+        z-index: 100;
+        overflow: hidden;
+    }
+
+    .file-menu-dropdown button {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        padding: 8px 12px;
+        font-size: 0.85rem;
+        background: transparent;
+        border: none;
+        border-radius: 0;
+        color: #ccc;
+        cursor: pointer;
+        text-align: left;
+        transition: background 0.1s;
+    }
+
+    .file-menu-dropdown button:hover {
+        background: #3a3a3a;
+    }
+
+    .menu-item-label {
+        flex: 1;
+    }
+
+    .menu-item-shortcut {
+        font-size: 0.75rem;
+        color: #888;
+        margin-left: 16px;
+    }
+
+    .menu-divider {
+        height: 1px;
+        background: #4a4a4a;
+        margin: 4px 0;
+    }
+
     .tool-group button:disabled {
         opacity: 0.4;
         cursor: not-allowed;
@@ -3784,16 +3895,6 @@
         background: #2a2a2a;
         color: #ccc;
         font-size: 0.8rem;
-    }
-
-    .export-btn {
-        background: #2e7d32 !important;
-        border-color: #388e3c !important;
-    }
-
-    .export-btn:hover {
-        background: #388e3c !important;
-        border-color: #4caf50 !important;
     }
 
     /* Main Content Area */
@@ -4202,6 +4303,28 @@
         .tool-group button:hover {
             background: #d0d0d0;
             border-color: #bbb;
+        }
+
+        .file-menu-dropdown {
+            background: #fff;
+            border-color: #ccc;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .file-menu-dropdown button {
+            color: #333;
+        }
+
+        .file-menu-dropdown button:hover {
+            background: #f0f0f0;
+        }
+
+        .menu-item-shortcut {
+            color: #999;
+        }
+
+        .menu-divider {
+            background: #ddd;
         }
 
         #color-picker {
