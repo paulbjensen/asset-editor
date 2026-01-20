@@ -56,6 +56,7 @@
     let deleteConfirmId: string | null = $state(null);
     let showFileMenu: boolean = $state(false);
     let showEditMenu: boolean = $state(false);
+    let showViewMenu: boolean = $state(false);
 
     // Custom dimension inputs
     let customWidth: string = $state("512");
@@ -745,6 +746,7 @@
     function toggleFileMenu(): void {
         showFileMenu = !showFileMenu;
         showEditMenu = false;
+        showViewMenu = false;
     }
 
     function closeFileMenu(): void {
@@ -759,6 +761,7 @@
     function toggleEditMenu(): void {
         showEditMenu = !showEditMenu;
         showFileMenu = false;
+        showViewMenu = false;
     }
 
     function closeEditMenu(): void {
@@ -768,6 +771,25 @@
     function handleEditMenuAction(action: () => void): void {
         action();
         closeEditMenu();
+    }
+
+    function toggleViewMenu(): void {
+        showViewMenu = !showViewMenu;
+        showFileMenu = false;
+        showEditMenu = false;
+    }
+
+    function closeViewMenu(): void {
+        showViewMenu = false;
+    }
+
+    function handleViewMenuAction(action: () => void): void {
+        action();
+        closeViewMenu();
+    }
+
+    function resetZoom(): void {
+        zoom = 1;
     }
 
     function newImage(): void {
@@ -2860,6 +2882,61 @@
                 {/if}
             </div>
 
+            <div class="tool-group file-menu-container">
+                <button
+                    class="file-menu-button"
+                    class:active={showViewMenu}
+                    onclick={toggleViewMenu}
+                >
+                    View
+                </button>
+                {#if showViewMenu}
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
+                    <div
+                        class="file-menu-backdrop"
+                        onclick={closeViewMenu}
+                        onkeydown={(e) => e.key === "Escape" && closeViewMenu()}
+                    ></div>
+                    <div class="file-menu-dropdown">
+                        <button
+                            onclick={() => handleViewMenuAction(zoomIn)}
+                            disabled={zoom >= 32}
+                        >
+                            <span class="menu-item-label">Zoom In</span>
+                        </button>
+                        <button
+                            onclick={() => handleViewMenuAction(zoomOut)}
+                            disabled={zoom <= 0.125}
+                        >
+                            <span class="menu-item-label">Zoom Out</span>
+                        </button>
+                        <button onclick={() => handleViewMenuAction(resetZoom)}>
+                            <span class="menu-item-label"
+                                >Reset Zoom (100%)</span
+                            >
+                        </button>
+                        <div class="menu-divider"></div>
+                        <button
+                            onclick={() => handleViewMenuAction(toggleGrid)}
+                        >
+                            <span class="menu-item-label"
+                                >{showGrid ? "✓" : ""} Show Grid</span
+                            >
+                        </button>
+                        <button
+                            onclick={() => {
+                                showPixelGrid = !showPixelGrid;
+                                closeViewMenu();
+                            }}
+                        >
+                            <span class="menu-item-label"
+                                >{showPixelGrid ? "✓" : ""} Show Pixel Grid</span
+                            >
+                        </button>
+                    </div>
+                {/if}
+            </div>
+
             <div class="toolbar-divider"></div>
 
             <div class="tool-group">
@@ -3022,59 +3099,6 @@
                 </div>
                 <div class="toolbar-divider"></div>
             {/if}
-
-            <div class="tool-group">
-                <span class="group-label">Zoom:</span>
-                <button onclick={zoomOut} disabled={zoom <= 0.125}>-</button>
-                <span class="zoom-value">{Math.round(zoom * 100)}%</span>
-                <button onclick={zoomIn} disabled={zoom >= 32}>+</button>
-            </div>
-
-            <div class="toolbar-divider"></div>
-
-            <div class="tool-group">
-                <span class="group-label">Grid:</span>
-                <button
-                    class:active={showGrid}
-                    onclick={toggleGrid}
-                    title="Toggle alignment grid"
-                >
-                    {showGrid ? "On" : "Off"}
-                </button>
-                {#if showGrid}
-                    <select
-                        onchange={(e) =>
-                            setGridSize(
-                                parseInt((e.target as HTMLSelectElement).value),
-                            )}
-                    >
-                        <option value="4" selected={gridSize === 4}>4px</option>
-                        <option value="8" selected={gridSize === 8}>8px</option>
-                        <option value="16" selected={gridSize === 16}
-                            >16px</option
-                        >
-                        <option value="32" selected={gridSize === 32}
-                            >32px</option
-                        >
-                    </select>
-                {/if}
-            </div>
-
-            <div class="tool-group">
-                <span class="group-label">Pixels:</span>
-                <button
-                    class:active={showPixelGrid}
-                    onclick={() => (showPixelGrid = !showPixelGrid)}
-                    title="Show pixel boundaries when zoomed in (400%+)"
-                >
-                    {showPixelGrid ? "On" : "Off"}
-                </button>
-                {#if zoom < PIXEL_GRID_MIN_ZOOM && showPixelGrid}
-                    <span class="hint">({PIXEL_GRID_MIN_ZOOM * 100}%+)</span>
-                {/if}
-            </div>
-
-            <div class="toolbar-divider"></div>
 
             <div class="tool-group">
                 <span class="group-label">Canvas:</span>
@@ -4175,14 +4199,6 @@
         font-style: italic;
     }
 
-    .zoom-value {
-        font-family: monospace;
-        font-size: 0.8rem;
-        min-width: 50px;
-        text-align: center;
-        color: #ccc;
-    }
-
     .number-input {
         width: 48px;
         padding: 0.25em 0.4em;
@@ -4647,7 +4663,6 @@
         }
 
         .color-hex,
-        .zoom-value,
         .opacity-value {
             color: #666;
         }
