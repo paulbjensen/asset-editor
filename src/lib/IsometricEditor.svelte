@@ -55,6 +55,7 @@
     let saveNameInput: string = $state("");
     let deleteConfirmId: string | null = $state(null);
     let showFileMenu: boolean = $state(false);
+    let showEditMenu: boolean = $state(false);
 
     // Custom dimension inputs
     let customWidth: string = $state("512");
@@ -717,6 +718,7 @@
 
     function toggleFileMenu(): void {
         showFileMenu = !showFileMenu;
+        showEditMenu = false;
     }
 
     function closeFileMenu(): void {
@@ -726,6 +728,20 @@
     function handleFileMenuAction(action: () => void): void {
         action();
         closeFileMenu();
+    }
+
+    function toggleEditMenu(): void {
+        showEditMenu = !showEditMenu;
+        showFileMenu = false;
+    }
+
+    function closeEditMenu(): void {
+        showEditMenu = false;
+    }
+
+    function handleEditMenuAction(action: () => void): void {
+        action();
+        closeEditMenu();
     }
 
     function newImage(): void {
@@ -2570,6 +2586,46 @@
                 {/if}
             </div>
 
+            <div class="tool-group file-menu-container">
+                <button
+                    class="file-menu-button"
+                    class:active={showEditMenu}
+                    onclick={toggleEditMenu}
+                >
+                    Edit
+                </button>
+                {#if showEditMenu}
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
+                    <div
+                        class="file-menu-backdrop"
+                        onclick={closeEditMenu}
+                        onkeydown={(e) => e.key === "Escape" && closeEditMenu()}
+                    ></div>
+                    <div class="file-menu-dropdown">
+                        <button
+                            onclick={() => handleEditMenuAction(undo)}
+                            disabled={undoStack.length === 0}
+                        >
+                            <span class="menu-item-label">Undo</span>
+                            <span class="menu-item-shortcut">Ctrl+Z</span>
+                        </button>
+                        <button
+                            onclick={() => handleEditMenuAction(redo)}
+                            disabled={redoStack.length === 0}
+                        >
+                            <span class="menu-item-label">Redo</span>
+                            <span class="menu-item-shortcut">Ctrl+Y</span>
+                        </button>
+                        <div class="menu-divider"></div>
+                        <button
+                            onclick={() => handleEditMenuAction(clearCanvas)}
+                        >
+                            <span class="menu-item-label">Clear Canvas</span>
+                        </button>
+                    </div>
+                {/if}
+            </div>
+
             <div class="toolbar-divider"></div>
 
             <div class="tool-group">
@@ -2664,27 +2720,6 @@
                     class="number-input"
                 />
                 <span class="unit">px</span>
-            </div>
-
-            <div class="toolbar-divider"></div>
-
-            <div class="tool-group">
-                <button
-                    onclick={undo}
-                    disabled={undoStack.length === 0}
-                    title="Undo (Ctrl+Z)">Undo</button
-                >
-                <button
-                    onclick={redo}
-                    disabled={redoStack.length === 0}
-                    title="Redo (Ctrl+Y)">Redo</button
-                >
-            </div>
-
-            <div class="toolbar-divider"></div>
-
-            <div class="tool-group">
-                <button onclick={clearCanvas}>Clear</button>
             </div>
         </div>
 
@@ -3795,6 +3830,15 @@
 
     .file-menu-dropdown button:hover {
         background: #3a3a3a;
+    }
+
+    .file-menu-dropdown button:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+
+    .file-menu-dropdown button:disabled:hover {
+        background: transparent;
     }
 
     .menu-item-label {
