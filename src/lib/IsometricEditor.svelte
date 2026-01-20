@@ -171,6 +171,9 @@
     let showPixelGrid: boolean = $state(true);
     const PIXEL_GRID_MIN_ZOOM = 4; // Only show pixel grid when zoom >= 400%
 
+    // Drag and drop state for importing images
+    let isDraggingFile: boolean = $state(false);
+
     // Isometric angles
     const ISOMETRIC_ANGLES = [
         0, 26.565, 30, 45, 60, 63.435, 90, 116.565, 120, 135, 150, 153.435, 180,
@@ -338,6 +341,106 @@
         if (index >= 0 && index < layers.length) {
             activeLayerIndex = index;
         }
+    }
+
+    // Drag and drop handlers for importing images
+    function handleFileDragOver(e: DragEvent) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer?.types.includes("Files")) {
+            isDraggingFile = true;
+            e.dataTransfer.dropEffect = "copy";
+        }
+    }
+
+    function handleFileDragLeave(e: DragEvent) {
+        e.preventDefault();
+        e.stopPropagation();
+        isDraggingFile = false;
+    }
+
+    function handleFileDrop(e: DragEvent) {
+        e.preventDefault();
+        e.stopPropagation();
+        isDraggingFile = false;
+
+        const files = e.dataTransfer?.files;
+        if (!files || files.length === 0) return;
+
+        // Process only image files
+        for (const file of Array.from(files)) {
+            if (file.type.startsWith("image/")) {
+                loadImageAsNewLayer(file);
+            }
+        }
+    }
+
+    function loadImageAsNewLayer(file: File) {
+        const reader = new FileReader();
+
+        reader.onload = (e) => {
+            const img = new Image();
+
+            img.onload = () => {
+                // Extract filename without extension for layer name
+                const fileName = file.name.replace(/\.[^/.]+$/, "");
+
+                // Create a new layer
+                const newLayer = createLayer(fileName);
+
+                // Draw the image onto the layer canvas
+                // Scale or position the image to fit within the canvas bounds
+                const scale = Math.min(
+                    canvasWidth / img.width,
+                    canvasHeight / img.height,
+                    1, // Don't upscale if image is smaller
+                );
+
+                const scaledWidth = img.width * scale;
+                const scaledHeight = img.height * scale;
+
+                // Center the image on the canvas
+                const offsetX = Math.floor((canvasWidth - scaledWidth) / 2);
+                const offsetY = Math.floor((canvasHeight - scaledHeight) / 2);
+
+                // For pixel art, we want crisp rendering
+                newLayer.ctx.imageSmoothingEnabled = false;
+
+                // If the image fits exactly or is smaller, draw at 1:1
+                if (img.width <= canvasWidth && img.height <= canvasHeight) {
+                    newLayer.ctx.drawImage(img, offsetX, offsetY);
+                } else {
+                    // Scale down to fit
+                    newLayer.ctx.drawImage(
+                        img,
+                        offsetX,
+                        offsetY,
+                        scaledWidth,
+                        scaledHeight,
+                    );
+                }
+
+                // Insert new layer above active layer
+                const newLayers = [...layers];
+                newLayers.splice(activeLayerIndex + 1, 0, newLayer);
+                layers = newLayers;
+                activeLayerIndex = activeLayerIndex + 1;
+
+                compositeAndRender();
+            };
+
+            img.onerror = () => {
+                console.error("Failed to load image:", file.name);
+            };
+
+            img.src = e.target?.result as string;
+        };
+
+        reader.onerror = () => {
+            console.error("Failed to read file:", file.name);
+        };
+
+        reader.readAsDataURL(file);
     }
 
     function compositeAndRender() {
@@ -2770,8 +2873,12 @@
         <!-- Canvas Area (center) -->
         <main
             class="canvas-area"
+            class:drag-over={isDraggingFile}
             bind:this={canvasWrapper}
             onwheel={handleWheel}
+            ondragover={handleFileDragOver}
+            ondragleave={handleFileDragLeave}
+            ondrop={handleFileDrop}
         >
             <div
                 class="canvas-container"
@@ -3706,6 +3813,29 @@
         background: repeating-conic-gradient(#2a2a2a 0% 25%, #222 0% 50%) 50% /
             16px 16px;
         padding: 40px;
+        position: relative;
+        transition: background-color 0.2s;
+    }
+
+    .canvas-area.drag-over {
+        background-color: rgba(100, 108, 255, 0.15);
+    }
+
+    .canvas-area.drag-over::after {
+        content: "Drop image to add as new layer";
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        padding: 20px 40px;
+        background: rgba(100, 108, 255, 0.9);
+        color: white;
+        font-size: 1.1rem;
+        font-weight: 500;
+        border-radius: 8px;
+        pointer-events: none;
+        z-index: 100;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
     }
 
     .canvas-container {
@@ -4098,6 +4228,10 @@
         .canvas-area {
             background: repeating-conic-gradient(#ddd 0% 25%, #eee 0% 50%) 50% /
                 16px 16px;
+        }
+
+        .canvas-area.drag-over {
+            background-color: rgba(100, 108, 255, 0.1);
         }
 
         .sidebar {
