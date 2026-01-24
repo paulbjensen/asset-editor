@@ -3178,6 +3178,30 @@
                     >Apply</button
                 >
             </div>
+
+            <div class="toolbar-divider"></div>
+
+            <div class="tool-group">
+                <span class="group-label">Zoom:</span>
+                <button
+                    onclick={zoomOut}
+                    disabled={zoom <= 0.125}
+                    title="Zoom Out"
+                >
+                    -
+                </button>
+                <span class="zoom-display">{Math.round(zoom * 100)}%</span>
+                <button onclick={zoomIn} disabled={zoom >= 32} title="Zoom In">
+                    +
+                </button>
+                <button
+                    onclick={resetZoom}
+                    class="small-btn"
+                    title="Reset Zoom to 100%"
+                >
+                    Reset
+                </button>
+            </div>
         </div>
     </header>
 
@@ -4227,6 +4251,14 @@
         color: #888;
         min-width: 36px;
         text-align: right;
+    }
+
+    .zoom-display {
+        font-family: monospace;
+        font-size: 0.75rem;
+        color: #aaa;
+        min-width: 42px;
+        text-align: center;
     }
 
     .hint {
