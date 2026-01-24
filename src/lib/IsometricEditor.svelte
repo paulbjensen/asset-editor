@@ -57,6 +57,7 @@
     let showFileMenu: boolean = $state(false);
     let showEditMenu: boolean = $state(false);
     let showViewMenu: boolean = $state(false);
+    let showSplashScreen: boolean = $state(true);
 
     // Custom dimension inputs
     let customWidth: string = $state("512");
@@ -603,6 +604,10 @@
         showSaveModal = false;
         saveNameInput = "";
         saveAsMode = false;
+    }
+
+    function closeSplashScreen(): void {
+        showSplashScreen = false;
     }
 
     function saveCurrentImage(): void {
@@ -3693,6 +3698,102 @@
     </div>
 {/if}
 
+<!-- Splash Screen Modal -->
+{#if showSplashScreen}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+        class="modal-overlay splash-overlay"
+        onclick={closeSplashScreen}
+        onkeydown={(e) => e.key === "Escape" && closeSplashScreen()}
+    >
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div
+            class="splash-screen"
+            onclick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="splash-title"
+            tabindex="-1"
+        >
+            <div class="splash-content">
+                <div class="splash-logo">
+                    <div class="splash-icon">
+                        <svg viewBox="0 0 32 32" width="64" height="64">
+                            <rect
+                                x="4"
+                                y="4"
+                                width="8"
+                                height="8"
+                                fill="#646cff"
+                            />
+                            <rect
+                                x="14"
+                                y="4"
+                                width="8"
+                                height="8"
+                                fill="#747bff"
+                            />
+                            <rect
+                                x="4"
+                                y="14"
+                                width="8"
+                                height="8"
+                                fill="#747bff"
+                            />
+                            <rect
+                                x="14"
+                                y="14"
+                                width="8"
+                                height="8"
+                                fill="#646cff"
+                            />
+                            <rect
+                                x="24"
+                                y="14"
+                                width="4"
+                                height="4"
+                                fill="#8b8fff"
+                            />
+                            <rect
+                                x="14"
+                                y="24"
+                                width="4"
+                                height="4"
+                                fill="#8b8fff"
+                            />
+                        </svg>
+                    </div>
+                    <h1 id="splash-title" class="splash-title">BabsPixel</h1>
+                    <span class="splash-version">version 0.1</span>
+                </div>
+                <div class="splash-credits">
+                    <div class="splash-credit">
+                        <span class="credit-role">Developer</span>
+                        <a
+                            href="https://claude.ai"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="credit-name">Claude Code</a
+                        >
+                    </div>
+                    <div class="splash-credit">
+                        <span class="credit-role">Ideas Guy</span>
+                        <a
+                            href="https://paulbjensen.co.uk"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="credit-name">Paul Jensen</a
+                        >
+                    </div>
+                </div>
+                <button class="splash-close" onclick={closeSplashScreen}>
+                    Click anywhere to continue
+                </button>
+            </div>
+        </div>
+    </div>
+{/if}
+
 <style>
     .editor-layout {
         display: flex;
@@ -3837,6 +3938,118 @@
         border-color: #4a4a4a;
         color: #888;
         cursor: not-allowed;
+    }
+
+    /* Splash Screen Styles */
+    .splash-overlay {
+        background: rgba(0, 0, 0, 0.85);
+    }
+
+    .splash-screen {
+        background: linear-gradient(
+            145deg,
+            #1a1a2e 0%,
+            #16213e 50%,
+            #0f0f23 100%
+        );
+        border-radius: 12px;
+        box-shadow:
+            0 0 0 1px rgba(100, 108, 255, 0.3),
+            0 8px 32px rgba(0, 0, 0, 0.6),
+            0 0 60px rgba(100, 108, 255, 0.15);
+        padding: 0;
+        overflow: hidden;
+        min-width: 380px;
+    }
+
+    .splash-content {
+        padding: 48px 48px 32px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+    }
+
+    .splash-logo {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        margin-bottom: 32px;
+    }
+
+    .splash-icon {
+        margin-bottom: 16px;
+        filter: drop-shadow(0 4px 8px rgba(100, 108, 255, 0.3));
+    }
+
+    .splash-title {
+        margin: 0;
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #fff;
+        letter-spacing: -0.5px;
+        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    }
+
+    .splash-version {
+        margin-top: 8px;
+        font-size: 0.9rem;
+        color: #888;
+        font-weight: 400;
+    }
+
+    .splash-credits {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        margin-bottom: 32px;
+        padding: 20px 32px;
+        background: rgba(0, 0, 0, 0.2);
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .splash-credit {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .credit-role {
+        font-size: 0.75rem;
+        color: #666;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .credit-name {
+        font-size: 1rem;
+        color: #646cff;
+        text-decoration: none;
+        font-weight: 500;
+        transition: color 0.2s;
+    }
+
+    .credit-name:hover {
+        color: #8b8fff;
+        text-decoration: underline;
+    }
+
+    .splash-close {
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        color: #666;
+        padding: 10px 24px;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .splash-close:hover {
+        background: rgba(255, 255, 255, 0.05);
+        border-color: rgba(255, 255, 255, 0.25);
+        color: #999;
     }
 
     /* Load Modal - Saved Images Grid */
@@ -4647,6 +4860,53 @@
 
         .modal-btn.secondary:hover {
             background: #d0d0d0;
+        }
+
+        /* Splash Screen Light Mode */
+        .splash-overlay {
+            background: rgba(255, 255, 255, 0.85);
+        }
+
+        .splash-screen {
+            background: linear-gradient(
+                145deg,
+                #f8f9fc 0%,
+                #e8ecf4 50%,
+                #f0f2f8 100%
+            );
+            box-shadow:
+                0 0 0 1px rgba(100, 108, 255, 0.2),
+                0 8px 32px rgba(0, 0, 0, 0.15),
+                0 0 60px rgba(100, 108, 255, 0.1);
+        }
+
+        .splash-title {
+            color: #1a1a2e;
+            text-shadow: none;
+        }
+
+        .splash-version {
+            color: #666;
+        }
+
+        .splash-credits {
+            background: rgba(0, 0, 0, 0.04);
+            border-color: rgba(0, 0, 0, 0.08);
+        }
+
+        .credit-role {
+            color: #888;
+        }
+
+        .splash-close {
+            border-color: rgba(0, 0, 0, 0.15);
+            color: #888;
+        }
+
+        .splash-close:hover {
+            background: rgba(0, 0, 0, 0.05);
+            border-color: rgba(0, 0, 0, 0.25);
+            color: #666;
         }
 
         .empty-state {
