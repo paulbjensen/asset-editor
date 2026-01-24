@@ -106,6 +106,7 @@
     let canvas: HTMLCanvasElement;
     let gridCanvas: HTMLCanvasElement;
     let previewCanvas: HTMLCanvasElement;
+    let pixelGridCanvas: HTMLCanvasElement | null = $state(null);
     let canvasWrapper: HTMLElement;
     let ctx: CanvasRenderingContext2D | null = $state(null);
     let gridCtx: CanvasRenderingContext2D | null = $state(null);
@@ -2682,6 +2683,40 @@
         }
     }
 
+    function drawPixelGrid() {
+        if (!pixelGridCanvas) return;
+
+        const ctx = pixelGridCanvas.getContext("2d");
+        if (!ctx) return;
+
+        const displayWidth = canvasWidth * zoom;
+        const displayHeight = canvasHeight * zoom;
+
+        // Clear the canvas
+        ctx.clearRect(0, 0, displayWidth, displayHeight);
+
+        ctx.strokeStyle = "rgba(128, 128, 128, 0.3)";
+        ctx.lineWidth = 1;
+
+        // Draw vertical lines at exact pixel boundaries
+        for (let x = 0; x <= canvasWidth; x++) {
+            const screenX = Math.round(x * zoom);
+            ctx.beginPath();
+            ctx.moveTo(screenX + 0.5, 0);
+            ctx.lineTo(screenX + 0.5, displayHeight);
+            ctx.stroke();
+        }
+
+        // Draw horizontal lines at exact pixel boundaries
+        for (let y = 0; y <= canvasHeight; y++) {
+            const screenY = Math.round(y * zoom);
+            ctx.beginPath();
+            ctx.moveTo(0, screenY + 0.5);
+            ctx.lineTo(displayWidth, screenY + 0.5);
+            ctx.stroke();
+        }
+    }
+
     function toggleGrid() {
         showGrid = !showGrid;
         clearGridCanvas();
@@ -2849,6 +2884,22 @@
         if (gridCtx) {
             clearGridCanvas();
             if (showGrid) drawGrid();
+        }
+    });
+
+    // Redraw pixel grid when zoom, canvas size, or visibility changes
+    $effect(() => {
+        // Access reactive dependencies
+        const _zoom = zoom;
+        const _width = canvasWidth;
+        const _height = canvasHeight;
+        const _show = showPixelGrid;
+
+        if (pixelGridCanvas && _show && _zoom >= PIXEL_GRID_MIN_ZOOM) {
+            // Use requestAnimationFrame to ensure canvas is properly sized
+            requestAnimationFrame(() => {
+                drawPixelGrid();
+            });
         }
     });
 </script>
@@ -3357,14 +3408,12 @@
                     class="main-canvas"
                 ></canvas>
                 {#if showPixelGrid && zoom >= PIXEL_GRID_MIN_ZOOM}
-                    <div
+                    <canvas
+                        bind:this={pixelGridCanvas}
                         class="pixel-grid-overlay"
-                        style="
-                            background-size: {zoom}px {zoom}px;
-                            background-image: linear-gradient(to right, rgba(128,128,128,0.3) 1px, transparent 1px),
-                                              linear-gradient(to bottom, rgba(128,128,128,0.3) 1px, transparent 1px);
-                        "
-                    ></div>
+                        width={canvasWidth * zoom}
+                        height={canvasHeight * zoom}
+                    ></canvas>
                 {/if}
                 <canvas
                     bind:this={gridCanvas}
