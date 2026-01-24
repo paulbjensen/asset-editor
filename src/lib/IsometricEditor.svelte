@@ -2731,6 +2731,33 @@
         link.click();
     }
 
+    function calculateAutoZoom(width: number, height: number): number {
+        // Get the canvas area dimensions (approximate visible area)
+        // Target: canvas should take up roughly 60-80% of the visible area
+        const targetSize = 400; // Target pixel size for the canvas display
+
+        const maxDimension = Math.max(width, height);
+
+        // Calculate zoom to make the canvas approximately targetSize pixels
+        let idealZoom = targetSize / maxDimension;
+
+        // Snap to nearest power of 2 zoom level for clean pixel rendering
+        // Valid zoom levels: 0.125, 0.25, 0.5, 1, 2, 4, 8, 16, 32
+        const zoomLevels = [0.125, 0.25, 0.5, 1, 2, 4, 8, 16, 32];
+
+        // Find the closest zoom level that doesn't exceed our ideal
+        let bestZoom = 1;
+        for (const level of zoomLevels) {
+            if (level <= idealZoom * 1.2) {
+                // Allow slightly larger than ideal
+                bestZoom = level;
+            }
+        }
+
+        // Clamp to reasonable bounds
+        return Math.max(0.125, Math.min(32, bestZoom));
+    }
+
     function applyCanvasSize(width: number, height: number) {
         // Save image data from all layers before resizing
         const layerImageData = layers.map((layer) => ({
@@ -2742,6 +2769,9 @@
         canvasHeight = height;
         customWidth = String(width);
         customHeight = String(height);
+
+        // Auto-adjust zoom for small canvases
+        zoom = calculateAutoZoom(width, height);
 
         undoStack = [];
         redoStack = [];
@@ -4310,8 +4340,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: repeating-conic-gradient(#2a2a2a 0% 25%, #222 0% 50%) 50% /
-            16px 16px;
+        background: none;
         padding: 40px;
         position: relative;
         transition: background-color 0.2s;
@@ -4340,7 +4369,13 @@
 
     .canvas-container {
         position: relative;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        border: solid 1px #333;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        .canvas-container {
+            border: solid 1px #aaa;
+        }
     }
 
     .main-canvas,
@@ -4748,8 +4783,7 @@
         }
 
         .canvas-area {
-            background: repeating-conic-gradient(#ddd 0% 25%, #eee 0% 50%) 50% /
-                16px 16px;
+            background: none;
         }
 
         .canvas-area.drag-over {
