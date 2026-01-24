@@ -1519,7 +1519,10 @@
         };
     }
 
-    function getCanvasCoordinates(e: MouseEvent): { x: number; y: number } {
+    function getCanvasCoordinates(e: MouseEvent | PointerEvent): {
+        x: number;
+        y: number;
+    } {
         const rect = canvas.getBoundingClientRect();
         const scaleX = canvasWidth / rect.width;
         const scaleY = canvasHeight / rect.height;
@@ -2340,7 +2343,10 @@
         }
     }
 
-    function handleMouseDown(e: MouseEvent) {
+    function handlePointerDown(e: PointerEvent) {
+        // Capture pointer to receive events even outside canvas
+        (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
+
         if (tool === "pan") {
             isPanning = true;
             panStartX = e.clientX;
@@ -2466,7 +2472,7 @@
         }
     }
 
-    function handleMouseMove(e: MouseEvent) {
+    function handlePointerMove(e: PointerEvent) {
         if (tool === "pan" && isPanning) {
             const dx = e.clientX - panStartX;
             const dy = e.clientY - panStartY;
@@ -2520,7 +2526,10 @@
         }
     }
 
-    function handleMouseUp(e: MouseEvent) {
+    function handlePointerUp(e: PointerEvent) {
+        // Release pointer capture
+        (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId);
+
         if (tool === "pan") {
             isPanning = false;
             return;
@@ -2576,7 +2585,33 @@
         }
     }
 
-    function handleMouseLeave() {
+    function handlePointerLeave(e: PointerEvent) {
+        // Only handle if pointer is not captured (allows drawing outside canvas while captured)
+        if (!(e.target as HTMLCanvasElement).hasPointerCapture(e.pointerId)) {
+            isDrawing = false;
+            isPanning = false;
+            isSelecting = false;
+            isMovingSelection = false;
+            isLassoing = false;
+            if (isDrawingLine) {
+                isDrawingLine = false;
+                clearGridCanvas();
+                if (showGrid) drawGrid();
+            }
+            if (tool === "shape") {
+                clearGridCanvas();
+                if (showGrid) drawGrid();
+            }
+        }
+    }
+
+    function handlePointerCancel(e: PointerEvent) {
+        // Release pointer capture on cancel
+        try {
+            (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId);
+        } catch {
+            // Ignore if not captured
+        }
         isDrawing = false;
         isPanning = false;
         isSelecting = false;
@@ -3286,10 +3321,11 @@
                     class:fill-cursor={tool === "fill" || tool === "replace"}
                     class:shape-cursor={tool === "shape"}
                     class:select-cursor={tool === "select"}
-                    onmousedown={handleMouseDown}
-                    onmousemove={handleMouseMove}
-                    onmouseup={handleMouseUp}
-                    onmouseleave={handleMouseLeave}
+                    onpointerdown={handlePointerDown}
+                    onpointermove={handlePointerMove}
+                    onpointerup={handlePointerUp}
+                    onpointerleave={handlePointerLeave}
+                    onpointercancel={handlePointerCancel}
                 ></canvas>
             </div>
         </main>
@@ -4303,6 +4339,7 @@
     .grid-canvas {
         z-index: 3;
         cursor: crosshair;
+        touch-action: none; /* Prevent default touch behaviors for stylus/pen input */
     }
 
     .grid-canvas.pan-cursor {
