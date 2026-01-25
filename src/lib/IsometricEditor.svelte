@@ -3797,7 +3797,7 @@
                     </div>
                 </div>
                 <button class="splash-close" onclick={closeSplashScreen}>
-                    Click anywhere to continue
+                    Click here to continue
                 </button>
             </div>
         </div>
