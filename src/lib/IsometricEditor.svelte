@@ -660,16 +660,12 @@
     }
 
     function loadImage(image: SavedImage): void {
-        // Clear current layers
-        layers = [];
+        // Close modal first to avoid UI conflicts during loading
+        closeLoadModal();
 
-        // Resize canvas if needed
-        if (canvasWidth !== image.width || canvasHeight !== image.height) {
-            canvasWidth = image.width;
-            canvasHeight = image.height;
-            customWidth = String(image.width);
-            customHeight = String(image.height);
-        }
+        // Track how many images need to load
+        let imagesToLoad = image.layers.length;
+        let imagesLoaded = 0;
 
         // Recreate layers from saved data
         const loadedLayers: Layer[] = [];
@@ -685,7 +681,14 @@
             const img = new Image();
             img.onload = () => {
                 layerCtx.drawImage(img, 0, 0);
-                compositeAndRender();
+                imagesLoaded++;
+                // Only composite after all images are loaded and state is fully set
+                if (imagesLoaded === imagesToLoad) {
+                    // Use requestAnimationFrame to defer state update outside of any reactive context
+                    requestAnimationFrame(() => {
+                        compositeAndRender();
+                    });
+                }
             };
             img.src = savedLayer.imageData;
 
@@ -696,6 +699,15 @@
                 ctx: layerCtx,
                 visible: savedLayer.visible,
             });
+        }
+
+        // Update all state at once to minimize reactive updates
+        // Resize canvas if needed
+        if (canvasWidth !== image.width || canvasHeight !== image.height) {
+            canvasWidth = image.width;
+            canvasHeight = image.height;
+            customWidth = String(image.width);
+            customHeight = String(image.height);
         }
 
         layers = loadedLayers;
@@ -710,12 +722,10 @@
         undoStack = [];
         redoStack = [];
 
-        closeLoadModal();
-
-        // Trigger composite after images load
-        setTimeout(() => {
+        // Trigger initial composite (layers may render before images fully load)
+        requestAnimationFrame(() => {
             compositeAndRender();
-        }, 100);
+        });
     }
 
     function confirmDeleteImage(id: string): void {
@@ -3623,7 +3633,7 @@
                     </div>
                 {:else}
                     <div class="saved-images-grid">
-                        {#each savedImages.sort((a, b) => b.updatedAt - a.updatedAt) as image}
+                        {#each [...savedImages].sort((a, b) => b.updatedAt - a.updatedAt) as image}
                             <div
                                 class="saved-image-card"
                                 class:current={image.id === currentImageId}
